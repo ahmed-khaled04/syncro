@@ -1,28 +1,94 @@
 const Y = require("yjs");
 
-const roomDocs = new Map();       
-const cleanupTimers = new Map();  
+const roomDocs = new Map();          // roomId -> Y.Doc
+const roomReady = new Map();         // roomId -> Promise<void>
+const cleanupTimers = new Map();     // roomId -> Timeout
+const saveTimers = new Map();        // roomId -> Timeout
+
+let snapshotRepo = null;
+function setSnapshotRepo(repo) {
+  snapshotRepo = repo;
+}
+
+function getDebounceMs() {
+  const v = Number(process.env.SNAPSHOT_DEBOUNCE_MS);
+  return Number.isFinite(v) ? v : 1000;
+}
+
+function ensureRoomCreated(roomId) {
+  if (roomDocs.has(roomId)) return;
+
+  const doc = new Y.Doc();
+  doc.getText("codemirror");
+  roomDocs.set(roomId, doc);
+
+  // ---- READY PROMISE (load snapshot once) ----
+  const readyPromise = (async () => {
+    if (!snapshotRepo) return;
+
+    try {
+      const snapshot = await snapshotRepo.getSnapshot(roomId);
+      if (snapshot) {
+        Y.applyUpdate(doc, new Uint8Array(snapshot), "remote");
+        console.log(`📥 Loaded snapshot for room: ${roomId}`);
+      } else {
+        console.log(`ℹ️ No snapshot found for room: ${roomId}`);
+      }
+    } catch (e) {
+      console.warn(`⚠️ Failed to load snapshot for room ${roomId}:`, e);
+    }
+  })();
+
+  roomReady.set(roomId, readyPromise);
+
+  // ---- Debounced saver ----
+  doc.on("update", () => {
+    if (!snapshotRepo) return;
+
+    const existing = saveTimers.get(roomId);
+    if (existing) clearTimeout(existing);
+
+    const t = setTimeout(() => {
+      (async () => {
+        try {
+          const update = Y.encodeStateAsUpdate(doc);
+          await snapshotRepo.saveSnapshot(roomId, Buffer.from(update));
+          console.log(`💾 Saved snapshot for room: ${roomId}`);
+        } catch (e) {
+          console.warn(`⚠️ Failed to save snapshot for room ${roomId}:`, e);
+        } finally {
+          saveTimers.delete(roomId);
+        }
+      })();
+    }, getDebounceMs());
+
+    saveTimers.set(roomId, t);
+  });
+}
 
 function getRoomDoc(roomId) {
-  if (!roomDocs.has(roomId)) {
-    const doc = new Y.Doc();
-    doc.getText("codemirror"); 
-    roomDocs.set(roomId, doc);
-  }
+  ensureRoomCreated(roomId);
   return roomDocs.get(roomId);
 }
 
-function hasRoomDoc(roomId) {
-  return roomDocs.has(roomId);
+// ✅ this is the key: wait until snapshot load finishes
+async function waitRoomReady(roomId) {
+  ensureRoomCreated(roomId);
+  const p = roomReady.get(roomId);
+  if (p) await p;
 }
 
 function deleteRoom(roomId) {
-  // clear timer if exists
-  const t = cleanupTimers.get(roomId);
-  if (t) clearTimeout(t);
+  const cleanup = cleanupTimers.get(roomId);
+  if (cleanup) clearTimeout(cleanup);
   cleanupTimers.delete(roomId);
 
-  // destroy doc
+  const save = saveTimers.get(roomId);
+  if (save) clearTimeout(save);
+  saveTimers.delete(roomId);
+
+  roomReady.delete(roomId);
+
   const doc = roomDocs.get(roomId);
   if (doc) doc.destroy?.();
   roomDocs.delete(roomId);
@@ -35,7 +101,6 @@ function cancelRoomCleanup(roomId) {
 }
 
 function scheduleRoomCleanup(roomId, delayMs = 10 * 60 * 1000) {
-  // already scheduled?
   if (cleanupTimers.has(roomId)) return;
 
   const t = setTimeout(() => {
@@ -48,8 +113,9 @@ function scheduleRoomCleanup(roomId, delayMs = 10 * 60 * 1000) {
 
 module.exports = {
   getRoomDoc,
-  hasRoomDoc,
+  waitRoomReady,
   deleteRoom,
   scheduleRoomCleanup,
   cancelRoomCleanup,
+  setSnapshotRepo,
 };
