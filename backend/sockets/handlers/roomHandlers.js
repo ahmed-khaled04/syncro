@@ -10,6 +10,7 @@ const {
 function registerRoomHandlers(io, socket) {
   socket.on("join-room", async ({ roomId, name }) => {
     socket.join(roomId);
+    socket.to(roomId).emit("awareness-resync");
     cancelRoomCleanup(roomId);
 
     // ✅ IMPORTANT: ensure snapshot loaded before sending full sync

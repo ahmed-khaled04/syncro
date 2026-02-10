@@ -1,5 +1,8 @@
 import { LANGS } from "../constants/langs";
 
+import OnlineUsers from "./OnlineUsers";
+
+
 function StatusPill({ synced }) {
   return (
     <span
@@ -16,7 +19,7 @@ function StatusPill({ synced }) {
   );
 }
 
-export default function EditorHeader({ roomId, synced, lang, onChangeLang }) {
+export default function EditorHeader({ roomId, synced, lang, onChangeLang , awareness }) {
   return (
     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-3">
@@ -35,6 +38,7 @@ export default function EditorHeader({ roomId, synced, lang, onChangeLang }) {
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <OnlineUsers awareness={awareness}/>
         <label className="text-xs font-medium text-zinc-400">Language</label>
 
         <div className="relative">

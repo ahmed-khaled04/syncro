@@ -11,6 +11,10 @@ function registerYjsHandlers(io, socket) {
     // broadcast to others
     socket.to(roomId).emit("y-update", { update });
   });
+  
+  socket.on("awareness-update", ({ roomId, update }) => {
+    socket.to(roomId).emit("awareness-update", { update });
+  });
 }
 
 module.exports = { registerYjsHandlers };
