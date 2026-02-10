@@ -1,4 +1,5 @@
-import { useLocation, useParams, Navigate, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import { socket } from "../config/socket";
 import { useRoomLanguage } from "../hooks/useRoomLanguage";
 import { useYjsSync } from "../hooks/useYjsSync";
@@ -11,15 +12,27 @@ export default function RoomPage() {
   const navigate = useNavigate();
   const name = location.state?.name;
 
-  // If user opened link directly without name
-  if (!name) {
-    return <Navigate to="/" replace />;
-  }
+  if (!name) return <Navigate to="/" replace />;
 
   const { ytext, awareness, synced, ready } = useYjsSync(socket, roomId, name);
   const { lang, setRoomLanguage } = useRoomLanguage(socket, roomId, "js");
 
-  // ---------- LOADING STATE ----------
+  const [connected, setConnected] = useState(socket.connected);
+
+  useEffect(() => {
+    const onConnect = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    setConnected(socket.connected);
+
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
+  }, []);
+
   if (!ready) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
@@ -33,48 +46,58 @@ export default function RoomPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto max-w-6xl px-4 py-6 space-y-4">
-        
-        {/* -------- TOP BAR -------- */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate("/")}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
-            >
-              ← Leave room
-            </button>
+      {/* subtle glow */}
+      <div className="pointer-events-none fixed inset-0 opacity-60">
+        <div className="absolute -top-24 left-1/2 h-72 w-[520px] -translate-x-1/2 rounded-full bg-indigo-500/15 blur-3xl" />
+        <div className="absolute bottom-0 right-0 h-72 w-[520px] rounded-full bg-cyan-500/10 blur-3xl" />
+      </div>
 
-            <div className="text-sm text-zinc-400">
-              Room: <span className="text-zinc-200 font-medium">{roomId}</span>
+      <div className="relative mx-auto max-w-6xl px-4 py-6 space-y-4">
+        {/* Top bar */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-xs text-zinc-400">Syncro</div>
+            <div className="text-base font-semibold tracking-tight">
+              Collaborative Room{" "}
+              <span className="font-mono text-zinc-300">#{roomId}</span>
+            </div>
+            <div className="mt-1 text-xs text-zinc-500">
+              You are signed in as <span className="text-zinc-300 font-medium">{name}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span
-              className={`text-xs px-2 py-1 rounded-full border ${
-                synced
-                  ? "border-emerald-500/40 text-emerald-400"
-                  : "border-yellow-500/40 text-yellow-400"
-              }`}
-            >
-              {synced ? "Synced" : "Syncing…"}
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-2 text-sm font-semibold text-zinc-200
+                       hover:bg-rose-500/10 hover:border-rose-500/30 hover:text-rose-100 transition
+                       focus:outline-none focus:ring-2 focus:ring-rose-500/20 active:scale-[0.98]"
+            title="Leave room"
+          >
+            <span className="text-base">⟵</span> Leave
+          </button>
         </div>
 
-        {/* -------- HEADER -------- */}
         <EditorHeader
           roomId={roomId}
+          connected={connected}
           synced={synced}
           lang={lang}
           onChangeLang={setRoomLanguage}
           awareness={awareness}
+          ytext={ytext}
         />
 
-        {/* -------- EDITOR -------- */}
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-xl overflow-hidden">
-          <CollabEditor lang={lang} ytext={ytext} awareness={awareness} />
+        <div className="relative mt-6 mb-4">
+
+            <div className="pointer-events-none absolute inset-x-10 -top-2 h-10 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent blur-2xl" />
+
+        {/* thin soft line */}
+            <div className="pointer-events-none mx-auto h-px w-2/3 bg-gradient-to-r from-transparent via-zinc-700/60 to-transparent" />
+        </div>
+
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-2xl overflow-hidden">
+            <CollabEditor lang={lang} ytext={ytext} awareness={awareness} />
         </div>
       </div>
     </div>
