@@ -1,19 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
-import {
-  Awareness,
-  encodeAwarenessUpdate,
-  applyAwarenessUpdate,
-} from "y-protocols/awareness";
-
-function randomColor() {
-  const colors = [
-    "#ef4444", "#f97316", "#eab308",
-    "#22c55e", "#06b6d4", "#3b82f6",
-    "#8b5cf6", "#ec4899",
-  ];
-  return colors[Math.floor(Math.random() * colors.length)];
-}
+import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from "y-protocols/awareness";
 
 function getUserId() {
   let id = localStorage.getItem("syncro-user-id");
@@ -24,13 +11,15 @@ function getUserId() {
   return id;
 }
 
-function getUserColor(userId) {
-  const key = `syncro-color-${userId}`;
-  const stored = localStorage.getItem(key);
-  if (stored) return stored;
-  const c = randomColor();
-  localStorage.setItem(key, c);
-  return c;
+function colorFromId(id) {
+  const palette = [
+    "#ef4444", "#f97316", "#eab308",
+    "#22c55e", "#06b6d4", "#3b82f6",
+    "#8b5cf6", "#ec4899",
+  ];
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
 }
 
 export function useYjsSync(socket, roomId, name) {
@@ -40,27 +29,18 @@ export function useYjsSync(socket, roomId, name) {
   const ydocRef = useRef(null);
   const ytextRef = useRef(null);
   const awarenessRef = useRef(null);
+
   const announcedRef = useRef(false);
   const userIdRef = useRef(null);
   const colorRef = useRef(null);
 
-
+  // INIT (StrictMode-safe). Re-init on room change.
   useEffect(() => {
-  if (!ready || !awarenessRef.current) return;
-  console.log("AWARENESS STATES", Array.from(awarenessRef.current.getStates().values()));
-}, [ready]);
-
-
-  // --- INIT (StrictMode-safe) ---
-  useEffect(() => {
-    // If already initialized, do nothing
-    if (ydocRef.current && awarenessRef.current && ytextRef.current) {
-      setReady(true);
-      return;
-    }
+    announcedRef.current = false;
+    setReady(false);
 
     userIdRef.current = getUserId();
-    colorRef.current = getUserColor(userIdRef.current);
+    colorRef.current = colorFromId(userIdRef.current);
 
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText("codemirror");
@@ -79,31 +59,20 @@ export function useYjsSync(socket, roomId, name) {
     setReady(true);
 
     return () => {
-      // IMPORTANT: reset refs + ready so StrictMode can re-init correctly
-      setReady(false);
-
-      try {
-        awareness.setLocalState(null);
-      } catch {}
-
-      try {
-        ydoc.destroy?.();
-      } catch {}
+      try { awareness.setLocalState(null); } catch {}
+      try { ydoc.destroy?.(); } catch {}
 
       ydocRef.current = null;
       ytextRef.current = null;
       awarenessRef.current = null;
     };
-    // re-init if roomId changes
   }, [roomId, name]);
-
 
   const ydoc = ydocRef.current;
   const ytext = ytextRef.current;
   const awareness = awarenessRef.current;
 
-
-  // ---------- JOIN ----------
+  // JOIN
   useEffect(() => {
     if (!ready) return;
 
@@ -114,11 +83,10 @@ export function useYjsSync(socket, roomId, name) {
 
     socket.on("connect", onConnect);
     if (socket.connected) onConnect();
-
     return () => socket.off("connect", onConnect);
   }, [ready, socket, roomId, name]);
 
-  // ---------- FULL SYNC ----------
+  // FULL SYNC
   useEffect(() => {
     if (!ready || !ydoc) return;
 
@@ -131,7 +99,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => socket.off("y-sync", onSync);
   }, [ready, socket, ydoc]);
 
-  // ---------- REMOTE DOC UPDATES ----------
+  // REMOTE DOC UPDATES
   useEffect(() => {
     if (!ready || !ydoc) return;
 
@@ -143,7 +111,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => socket.off("y-update", onRemoteUpdate);
   }, [ready, socket, ydoc]);
 
-  // ---------- LOCAL DOC UPDATES ----------
+  // LOCAL DOC UPDATES
   useEffect(() => {
     if (!ready || !ydoc) return;
 
@@ -156,7 +124,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => ydoc.off("update", onUpdate);
   }, [ready, socket, roomId, ydoc, synced]);
 
-  // ---------- AWARENESS SEND ----------
+  // AWARENESS SEND (deltas + announce once)
   useEffect(() => {
     if (!ready || !awareness) return;
 
@@ -170,7 +138,7 @@ export function useYjsSync(socket, roomId, name) {
 
     awareness.on("update", onAwarenessUpdate);
 
-    // ✅ IMPORTANT: announce my current awareness ONCE
+    // Announce once per room lifecycle (so existing clients see me immediately)
     if (!announcedRef.current) {
       announcedRef.current = true;
       const update = encodeAwarenessUpdate(awareness, [awareness.clientID]);
@@ -180,8 +148,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => awareness.off("update", onAwarenessUpdate);
   }, [ready, socket, awareness, roomId]);
 
-
-  // ---------- AWARENESS RECEIVE ----------
+  // AWARENESS RECEIVE
   useEffect(() => {
     if (!ready || !awareness) return;
 
@@ -193,7 +160,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => socket.off("awareness-update", onAwarenessMessage);
   }, [ready, socket, awareness]);
 
-  // ---------- RESYNC HANDSHAKE ----------
+  // RESYNC HANDSHAKE
   useEffect(() => {
     if (!ready || !awareness) return;
 
@@ -203,7 +170,6 @@ export function useYjsSync(socket, roomId, name) {
 
       const clientIds = Array.from(states.keys());
       const update = encodeAwarenessUpdate(awareness, clientIds);
-
       socket.emit("awareness-update", { roomId, update: Array.from(update) });
     };
 
@@ -211,21 +177,5 @@ export function useYjsSync(socket, roomId, name) {
     return () => socket.off("awareness-resync", resendAwareness);
   }, [ready, socket, awareness, roomId]);
 
-  useEffect(() => {
-    if (!ready || !awareness) return;
-    console.log(
-      "AWARENESS STATES",
-      Array.from(awareness.getStates().values())
-    );
-  }, [ready, awareness]);
-
-
-  // Return nulls until ready (caller must handle)
-  return {
-    ydoc,
-    ytext,
-    awareness,
-    synced,
-    ready,
-  };
+  return { ydoc, ytext, awareness, synced, ready };
 }
