@@ -43,12 +43,13 @@ const editorPadding = EditorView.theme({
   },
 });
 
-export default function CollabEditor({ lang, ytext, awareness }) {
+export default function CollabEditor({ lang, ytext, awareness, readOnly = false }) {
   const typingTimerRef = useRef(null);
 
-  // Ensure typing resets if component unmounts / room changes
   useEffect(() => {
     if (!awareness) return;
+
+    // always reset typing on mount/change
     awareness.setLocalStateField("typing", false);
 
     return () => {
@@ -66,25 +67,22 @@ export default function CollabEditor({ lang, ytext, awareness }) {
       langExt,
       presenceTheme,
       editorPadding,
+      EditorView.editable.of(!readOnly),
       yCollab(ytext, awareness, {
         undoManager: new Y.UndoManager(ytext),
       }),
     ];
-  }, [lang, ytext, awareness]);
+  }, [lang, ytext, awareness, readOnly]);
 
   const onChange = (_value, viewUpdate) => {
     if (!awareness) return;
+    if (readOnly) return; // ✅ viewers never “type”
 
-    // ✅ Only treat as "typing" if the transaction is a user action
     const isUserTyping = viewUpdate?.transactions?.some((tr) =>
-      tr.isUserEvent("input") ||
-      tr.isUserEvent("delete") ||
-      tr.isUserEvent("paste") ||
-      tr.isUserEvent("move") ||
-      tr.isUserEvent("select")
+      tr.isUserEvent("input") || tr.isUserEvent("delete") || tr.isUserEvent("paste")
     );
 
-    if (!isUserTyping) return; // <-- ignore remote updates
+    if (!isUserTyping) return;
 
     awareness.setLocalStateField("typing", true);
 
@@ -95,7 +93,6 @@ export default function CollabEditor({ lang, ytext, awareness }) {
       } catch {}
     }, 900);
   };
-
 
   return (
     <CodeMirror

@@ -78,7 +78,7 @@ export function useYjsSync(socket, roomId, name) {
 
     const onConnect = () => {
       setSynced(false);
-      socket.emit("join-room", { roomId, name });
+      socket.emit("join-room", { roomId, name, userId: userIdRef.current });
     };
 
     socket.on("connect", onConnect);
@@ -124,7 +124,7 @@ export function useYjsSync(socket, roomId, name) {
     return () => ydoc.off("update", onUpdate);
   }, [ready, socket, roomId, ydoc, synced]);
 
-  // AWARENESS SEND (deltas + announce once)
+  // AWARENESS SEND
   useEffect(() => {
     if (!ready || !awareness) return;
 
@@ -138,7 +138,7 @@ export function useYjsSync(socket, roomId, name) {
 
     awareness.on("update", onAwarenessUpdate);
 
-    // Announce once per room lifecycle (so existing clients see me immediately)
+    // announce once per room lifecycle
     if (!announcedRef.current) {
       announcedRef.current = true;
       const update = encodeAwarenessUpdate(awareness, [awareness.clientID]);

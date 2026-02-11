@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export default function OnlineUsers({ awareness }) {
+export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], locked = false }) {
   const [users, setUsers] = useState([]);
 
   const myUserId = useMemo(() => {
@@ -15,15 +15,12 @@ export default function OnlineUsers({ awareness }) {
     if (!awareness) return;
 
     const updateUsers = () => {
-      // states: Map<clientId, state>
       const entries = Array.from(awareness.getStates().entries());
-
-      // ✅ group by stable user.id to kill refresh duplicates
       const groups = new Map();
 
       for (const [clientId, s] of entries) {
         const u = s.user || {};
-        const userId = u.id || `client:${clientId}`; // fallback just in case
+        const userId = u.id || `client:${clientId}`;
 
         if (!groups.has(userId)) {
           groups.set(userId, {
@@ -31,15 +28,12 @@ export default function OnlineUsers({ awareness }) {
             name: u.name || "Anonymous",
             color: u.color || "#888",
             typing: false,
-            clientIds: new Set(),
           });
         }
 
         const g = groups.get(userId);
-        g.clientIds.add(clientId);
         if (s.typing) g.typing = true;
 
-        // keep best name/color if they appear later
         if (!g.name && u.name) g.name = u.name;
         if ((!g.color || g.color === "#888") && u.color) g.color = u.color;
       }
@@ -49,16 +43,23 @@ export default function OnlineUsers({ awareness }) {
         name: g.name,
         color: g.color,
         typing: g.typing,
+        isOwner: ownerId && g.userId === ownerId,
+        isEditor: locked && allowedEditors.includes(g.userId),
       }));
 
-      // ✅ me first
-      if (myUserId) {
-        list = list.sort((a, b) => {
-          const aMe = a.id === myUserId ? 0 : 1;
-          const bMe = b.id === myUserId ? 0 : 1;
-          return aMe - bMe;
-        });
-      }
+      list = list.sort((a, b) => {
+        const aMe = myUserId && a.id === myUserId ? 0 : 1;
+        const bMe = myUserId && b.id === myUserId ? 0 : 1;
+        if (aMe !== bMe) return aMe - bMe;
+
+        const aOwner = a.isOwner ? 0 : 1;
+        const bOwner = b.isOwner ? 0 : 1;
+        if (aOwner !== bOwner) return aOwner - bOwner;
+
+        const aEditor = a.isEditor ? 0 : 1;
+        const bEditor = b.isEditor ? 0 : 1;
+        return aEditor - bEditor;
+      });
 
       setUsers(list);
     };
@@ -71,29 +72,15 @@ export default function OnlineUsers({ awareness }) {
       awareness.off("update", updateUsers);
       awareness.off("change", updateUsers);
     };
-  }, [awareness, myUserId]);
+  }, [awareness, ownerId, allowedEditors, locked, myUserId]);
 
   if (!awareness) return null;
-
-  const typingUsers = users
-    .filter((u) => u.typing && (!myUserId || u.id !== myUserId))
-    .map((u) => u.name);
-
-  const typingText =
-    typingUsers.length === 0
-      ? ""
-      : typingUsers.length === 1
-      ? `${typingUsers[0]} is typing…`
-      : typingUsers.length === 2
-      ? `${typingUsers[0]} and ${typingUsers[1]} are typing…`
-      : `${typingUsers[0]}, ${typingUsers[1]} and ${typingUsers.length - 2} more are typing…`;
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-zinc-400">
-          Online{" "}
-          <span className="text-zinc-200 font-semibold">({users.length})</span>
+          Online <span className="text-zinc-200 font-semibold">({users.length})</span>
         </span>
 
         {users.map((user) => {
@@ -110,17 +97,22 @@ export default function OnlineUsers({ awareness }) {
               ].join(" ")}
               title={isMe ? "You" : user.name}
             >
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: user.color }}
-              />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: user.color }} />
+
               <span className="max-w-[120px] truncate">
+                {user.isOwner ? "👑 " : ""}
                 {user.name || "Anonymous"}
               </span>
 
-              {user.typing && !isMe && (
-                <span className="ml-1 rounded-full bg-zinc-700/40 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
-                  typing
+              {user.isOwner && (
+                <span className="ml-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/20">
+                  Owner
+                </span>
+              )}
+
+              {user.isEditor && !user.isOwner && (
+                <span className="ml-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200 ring-1 ring-emerald-500/20">
+                  Editor
                 </span>
               )}
 
@@ -133,10 +125,6 @@ export default function OnlineUsers({ awareness }) {
           );
         })}
       </div>
-
-      {typingText && (
-        <div className="text-[11px] text-zinc-400">{typingText}</div>
-      )}
     </div>
   );
 }
