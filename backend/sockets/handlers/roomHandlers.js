@@ -17,7 +17,14 @@ const {
   waitRoomReady,
   cancelRoomCleanup,
   scheduleRoomCleanup,
+  getSnapshotRepo,
 } = require("../../rooms/ydocStore");
+
+function isOwner(socket, roomId) {
+  const ownerId = getRoomOwner(roomId);
+  const userId = socket.data.userId;
+  return ownerId && userId && ownerId === userId;
+}
 
 function registerRoomHandlers(io, socket) {
   socket.on("join-room", async ({ roomId, name, userId }) => {
@@ -74,7 +81,10 @@ function registerRoomHandlers(io, socket) {
 
     // when unlocking we cleared editors in store; broadcast the cleared list
     if (!next) {
-      io.to(roomId).emit("room-editors", { roomId, editors: listRoomEditors(roomId) });
+      io.to(roomId).emit("room-editors", {
+        roomId,
+        editors: listRoomEditors(roomId),
+      });
     }
   });
 
@@ -102,7 +112,6 @@ function registerRoomHandlers(io, socket) {
     const userId = socket.data.userId;
     if (!ownerId || ownerId !== userId) return;
 
-    // only meaningful if locked; but we allow anyway
     allowEditor(roomId, targetUserId);
 
     io.to(roomId).emit("room-editors", {
@@ -110,7 +119,6 @@ function registerRoomHandlers(io, socket) {
       editors: listRoomEditors(roomId),
     });
 
-    // optional: notify the room (or just the target client UI will update)
     io.to(roomId).emit("system", `Edit access granted.`);
   });
 
@@ -128,6 +136,109 @@ function registerRoomHandlers(io, socket) {
     });
 
     io.to(roomId).emit("system", `Edit access revoked.`);
+  });
+
+  // -------------------------------
+  // ✅ SNAPSHOTS / VERSION HISTORY
+  // -------------------------------
+
+  // list versions
+  socket.on("snapshots:list", async ({ roomId, limit = 50 }) => {
+    const repo = getSnapshotRepo();
+    if (!repo) {
+      return socket.emit("snapshots:list:result", { roomId, items: [] });
+    }
+
+    try {
+      const items = await repo.listVersions(roomId, limit);
+      socket.emit("snapshots:list:result", { roomId, items });
+    } catch (e) {
+      console.warn("snapshots:list failed:", e);
+      socket.emit("snapshots:list:result", { roomId, items: [] });
+    }
+  });
+
+  // get one snapshot (for diff preview)
+  socket.on("snapshot:get", async ({ roomId, id }) => {
+    const repo = getSnapshotRepo();
+    if (!repo) return;
+
+    try {
+      const row = await repo.getVersion(roomId, Number(id));
+      if (!row) return;
+
+      socket.emit("snapshot:get:result", {
+        roomId,
+        snapshot: {
+          id: row.id,
+          kind: row.kind,
+          label: row.label,
+          created_by: row.created_by,
+          created_at: row.created_at,
+          content: row.content, // BEFORE content
+        },
+      });
+    } catch (e) {
+      console.warn("snapshot:get failed:", e);
+    }
+  });
+
+  // create milestone snapshot (owner-only)
+  socket.on("snapshot:create", async ({ roomId, label }) => {
+    if (!isOwner(socket, roomId)) return;
+
+    const repo = getSnapshotRepo();
+    if (!repo) return;
+
+    try {
+      const doc = getRoomDoc(roomId);
+      const ytext = doc.getText("codemirror");
+      const content = ytext.toString();
+      const update = Y.encodeStateAsUpdate(doc);
+
+      await repo.createVersion({
+        roomId,
+        kind: "milestone",
+        label: label || "Milestone",
+        createdBy: socket.data.userId || null,
+        snapshotBuffer: Buffer.from(update),
+        content,
+      });
+
+      io.to(roomId).emit("system", `📌 Milestone snapshot created.`);
+    } catch (e) {
+      console.warn("snapshot:create failed:", e);
+    }
+  });
+
+  // restore snapshot (owner-only)
+  socket.on("snapshot:restore", async ({ roomId, id }) => {
+    if (!isOwner(socket, roomId)) return;
+
+    const repo = getSnapshotRepo();
+    if (!repo) return;
+
+    try {
+      const row = await repo.getVersion(roomId, Number(id));
+      if (!row) return;
+
+      const doc = getRoomDoc(roomId);
+      const ytext = doc.getText("codemirror");
+
+      // Replace whole text (best for "restore")
+      doc.transact(() => {
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, row.content);
+      }, "restore");
+
+      // Broadcast full sync so everyone converges quickly
+      const full = Y.encodeStateAsUpdate(doc);
+      io.to(roomId).emit("y-sync", { update: Array.from(full) });
+
+      io.to(roomId).emit("system", `⏪ Snapshot restored by owner.`);
+    } catch (e) {
+      console.warn("snapshot:restore failed:", e);
+    }
   });
 
   socket.on("disconnecting", () => {

@@ -5,6 +5,7 @@ import { useRoomLanguage } from "../hooks/useRoomLanguage";
 import { useYjsSync } from "../hooks/useYjsSync";
 import EditorHeader from "../components/EditorHeader";
 import CollabEditor from "../components/CollabEditor";
+import SnapshotPanel from "../components/SnapshotPanel";
 
 export default function RoomPage() {
   const { roomId } = useParams();
@@ -193,6 +194,20 @@ export default function RoomPage() {
           onClearRequest={(id) => setEditRequests((prev) => prev.filter((r) => r.id !== id))}
           onClearAllRequests={() => setEditRequests([])}
         />
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-zinc-500">
+            History: auto snapshots every few minutes + owner milestones.
+          </div>
+
+          <SnapshotPanel
+            socket={socket}
+            roomId={roomId}
+            ytext={ytext}
+            youAreOwner={youAreOwner}
+            ownerId={ownerId}
+          />
+        </div>
 
         <div className="relative mt-6 mb-4">
           <div className="pointer-events-none absolute inset-x-10 -top-2 h-10 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent blur-2xl" />
