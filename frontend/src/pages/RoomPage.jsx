@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import { socket } from "../config/socket";
 import { useRoomLanguage } from "../hooks/useRoomLanguage";
 import { useYjsSync } from "../hooks/useYjsSync";
+import { detectLanguageFromFilename } from "../utils/languageDetector";
+import { exportProjectAsZip } from "../utils/projectExporter";
 import EditorHeader from "../components/EditorHeader";
 import CollabEditor from "../components/CollabEditor";
 import FileExplorer from "../components/FileExplorer";
 import SnapshotPanel from "../components/SnapshotPanel";
+import TabsBar from "../components/TabsBar";
+import CommandPalette from "../components/CommandPalette";
 
 export default function RoomPage() {
   const { roomId } = useParams();
@@ -38,8 +42,22 @@ export default function RoomPage() {
 
   const [userDirectory, setUserDirectory] = useState({});
 
-  // ✅ fileId, not a filename, and start null (no fake "main")
+  // ✅ selection
   const [selectedFileId, setSelectedFileId] = useState(null);
+
+  // ✅ tabs
+  const [openFiles, setOpenFiles] = useState([]);
+
+  // ✅ dirty tracking
+  const [dirtyFiles, setDirtyFiles] = useState(new Set());
+  const [lastSavedContent, setLastSavedContent] = useState(new Map());
+
+  // ✅ command palette
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // ✅ when user intentionally closes last tab, we "pause" auto-select
+  const suppressAutoSelectRef = useRef(false);
+  const suppressTimerRef = useRef(null);
 
   const ytext = useMemo(() => {
     if (!ydoc || !selectedFileId) return null;
@@ -47,7 +65,6 @@ export default function RoomPage() {
     return files.get(selectedFileId) || null;
   }, [ydoc, selectedFileId]);
 
-  // ✅ Human-readable filename for header (optional)
   const selectedFileName = useMemo(() => {
     if (!ydoc || !selectedFileId) return null;
     const nodes = ydoc.getMap("fs:nodes");
@@ -59,7 +76,52 @@ export default function RoomPage() {
     return selectedFileId;
   }, [ydoc, selectedFileId]);
 
-  // ✅ Auto-select first real file once FS loads / if selection becomes invalid
+  const fileLanguage = useMemo(() => {
+    return selectedFileName ? detectLanguageFromFilename(selectedFileName) : "js";
+  }, [selectedFileName]);
+
+  // awareness: current viewed file
+  useEffect(() => {
+    if (!awareness) return;
+    awareness.setLocalStateField("currentFileId", selectedFileId || null);
+  }, [awareness, selectedFileId]);
+
+  // add selected file to tabs
+  useEffect(() => {
+    if (!selectedFileId || !selectedFileName) return;
+
+    setOpenFiles((prev) => {
+      const exists = prev.some((f) => f.fileId === selectedFileId);
+      if (exists) return prev;
+
+      return [{ fileId: selectedFileId, name: selectedFileName }, ...prev].slice(0, 10);
+    });
+
+    if (ytext) {
+      const content = ytext.toString();
+      setLastSavedContent((prev) => new Map(prev).set(selectedFileId, content));
+    }
+  }, [selectedFileId, selectedFileName, ytext]);
+
+  // dirty detection
+  useEffect(() => {
+    if (!selectedFileId || !ytext) return;
+
+    const currentContent = ytext.toString();
+    const savedContent = lastSavedContent.get(selectedFileId);
+
+    if (currentContent !== savedContent) {
+      setDirtyFiles((prev) => new Set(prev).add(selectedFileId));
+    } else {
+      setDirtyFiles((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedFileId);
+        return next;
+      });
+    }
+  }, [ytext?.length, selectedFileId, lastSavedContent]);
+
+  // ✅ auto-select first file (but NOT if user just closed last tab)
   useEffect(() => {
     if (!ydoc) return;
 
@@ -67,6 +129,9 @@ export default function RoomPage() {
     const files = ydoc.getMap("files");
 
     const ensureValidSelection = () => {
+      // If user intentionally closed last tab, respect that (keep no selection)
+      if (suppressAutoSelectRef.current && !selectedFileId) return;
+
       if (selectedFileId && files.get(selectedFileId)) return;
 
       for (const [, node] of nodes.entries()) {
@@ -118,7 +183,7 @@ export default function RoomPage() {
     return () => socket.off("room-editors", onEditors);
   }, [roomId]);
 
-  // edit requests (owner receives)
+  // edit requests
   useEffect(() => {
     const onEditRequest = (payload) => {
       if (!payload || payload.roomId !== roomId) return;
@@ -140,7 +205,7 @@ export default function RoomPage() {
     return () => socket.off("edit-request", onEditRequest);
   }, [roomId]);
 
-  // awareness -> keep directory fresh
+  // awareness directory
   useEffect(() => {
     if (!awareness) return;
 
@@ -174,6 +239,127 @@ export default function RoomPage() {
     return () => {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
+    };
+  }, []);
+
+  // mark file as saved (you can wire this to snapshot save event later)
+  useEffect(() => {
+    if (!synced || !selectedFileId || !ytext) return;
+
+    const content = ytext.toString();
+    setLastSavedContent((prev) => new Map(prev).set(selectedFileId, content));
+    setDirtyFiles((prev) => {
+      const next = new Set(prev);
+      next.delete(selectedFileId);
+      return next;
+    });
+  }, [synced, selectedFileId, ytext?.length]);
+
+  // Keyboard shortcuts: Ctrl+P or Ctrl+K for command palette
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "k")) {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Flatten file tree for command palette search
+  const allFiles = useMemo(() => {
+    if (!ydoc) return [];
+    const nodes = ydoc.getMap("fs:nodes");
+    if (!nodes) return [];
+
+    const files = [];
+    const walk = (node) => {
+      if (node?.get("type") === "file") {
+        files.push({
+          fileId: node.get("fileId"),
+          name: node.get("name"),
+          type: "file",
+        });
+      }
+    };
+
+    nodes.forEach((node) => {
+      walk(node);
+    });
+
+    return files;
+  }, [ydoc]);
+
+  const handleCloseTab = (fileId) => {
+    const newOpenFiles = openFiles.filter((f) => f.fileId !== fileId);
+    setOpenFiles(newOpenFiles);
+
+    // clean its dirty marker too
+    setDirtyFiles((prev) => {
+      const next = new Set(prev);
+      next.delete(fileId);
+      return next;
+    });
+
+    // If closing selected tab:
+    if (fileId === selectedFileId) {
+      if (newOpenFiles.length > 0) {
+        setSelectedFileId(newOpenFiles[0].fileId);
+      } else {
+        // ✅ closing last tab -> keep no selection and temporarily suppress auto-select
+        setSelectedFileId(null);
+
+        suppressAutoSelectRef.current = true;
+        if (suppressTimerRef.current) clearTimeout(suppressTimerRef.current);
+        suppressTimerRef.current = setTimeout(() => {
+          suppressAutoSelectRef.current = false;
+        }, 250); // small window is enough
+      }
+    }
+  };
+
+  const handleCreateFile = (parentId = "root") => {
+    const name = prompt("File name:", "newFile.js");
+    if (name && name.trim()) {
+      socket.emit("fs:create-file", { roomId, parentId, name: name.trim() });
+    }
+  };
+
+  const handleCreateFolder = (parentId = "root") => {
+    const name = prompt("Folder name:", "newFolder");
+    if (name && name.trim()) {
+      socket.emit("fs:create-folder", { roomId, parentId, name: name.trim() });
+    }
+  };
+
+  const handleRenameFile = (fileId, currentName) => {
+    const newName = prompt("New name:", currentName);
+    if (newName && newName.trim() && newName !== currentName) {
+      socket.emit("fs:rename", { roomId, nodeId: fileId, name: newName.trim() });
+    }
+  };
+
+  const handleDeleteFile = (fileId, currentName) => {
+    if (confirm(`Delete "${currentName}"?`)) {
+      socket.emit("fs:delete", { roomId, nodeId: fileId });
+    }
+  };
+
+  const handleExportProject = async () => {
+    try {
+      await exportProjectAsZip(ydoc, roomId);
+    } catch (error) {
+      alert(`Export failed: ${error.message}`);
+      console.error("Export error:", error);
+    }
+  };
+
+  // cleanup timer
+  useEffect(() => {
+    return () => {
+      if (suppressTimerRef.current) clearTimeout(suppressTimerRef.current);
     };
   }, []);
 
@@ -228,7 +414,7 @@ export default function RoomPage() {
           roomId={roomId}
           connected={connected}
           synced={synced}
-          lang={lang}
+          lang={fileLanguage}
           onChangeLang={setRoomLanguage}
           awareness={awareness}
           ytext={ytext}
@@ -245,6 +431,7 @@ export default function RoomPage() {
           onRevokeEdit={(userId) => socket.emit("revoke-edit", { roomId, userId })}
           onClearRequest={(id) => setEditRequests((prev) => prev.filter((r) => r.id !== id))}
           onClearAllRequests={() => setEditRequests([])}
+          onExport={handleExportProject}
         />
 
         <div className="flex items-center justify-between gap-3">
@@ -265,11 +452,6 @@ export default function RoomPage() {
           />
         </div>
 
-        <div className="relative mt-2 mb-2">
-          <div className="pointer-events-none absolute inset-x-10 -top-2 h-10 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent blur-2xl" />
-          <div className="pointer-events-none mx-auto h-px w-2/3 bg-gradient-to-r from-transparent via-zinc-700/60 to-transparent" />
-        </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
           <div className="h-[520px] lg:h-[620px]">
             <FileExplorer
@@ -278,27 +460,65 @@ export default function RoomPage() {
               roomId={roomId}
               canEdit={hasEditAccess}
               selectedFileId={selectedFileId}
-              onSelectFile={(fid) => setSelectedFileId(fid)}
+              onSelectFile={(fid) => {
+                // selecting a file re-enables auto-select behavior
+                suppressAutoSelectRef.current = false;
+                setSelectedFileId(fid);
+              }}
+              awareness={awareness}
             />
           </div>
 
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-2xl overflow-hidden">
-            {ytext ? (
-              <CollabEditor
-                lang={lang}
-                fileId={selectedFileId}
-                ytext={ytext}
-                awareness={awareness}
-                readOnly={readOnly}
-              />
-            ) : (
-              <div className="h-[520px] lg:h-[620px] flex items-center justify-center text-sm text-zinc-400">
-                {ydoc ? "Loading file…" : "Joining room…"}
-              </div>
-            )}
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-2xl overflow-hidden flex flex-col">
+            <TabsBar
+              openFiles={openFiles}
+              selectedFileId={selectedFileId}
+              onSelectFile={(fid) => {
+                suppressAutoSelectRef.current = false;
+                setSelectedFileId(fid);
+              }}
+              onCloseTab={handleCloseTab}
+              dirtyFiles={dirtyFiles}
+              awareness={awareness}
+            />
+
+            <div className="flex-1 overflow-hidden">
+              {ytext ? (
+                <CollabEditor
+                  lang={fileLanguage}
+                  fileId={selectedFileId}
+                  ytext={ytext}
+                  awareness={awareness}
+                  readOnly={readOnly}
+                />
+              ) : (
+                <div className="h-[520px] lg:h-[620px] flex items-center justify-center text-sm text-zinc-400">
+                  {ydoc ? "Select a file from the explorer…" : "Joining room…"}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        files={allFiles}
+        selectedFileId={selectedFileId}
+        openFiles={openFiles}
+        onSelectFile={(fid) => {
+          suppressAutoSelectRef.current = false;
+          setSelectedFileId(fid);
+          setCommandPaletteOpen(false);
+        }}
+        onCloseTab={handleCloseTab}
+        onCreateFile={handleCreateFile}
+        onCreateFolder={handleCreateFolder}
+        onRename={handleRenameFile}
+        onDelete={handleDeleteFile}
+        onExport={handleExportProject}
+      />
     </div>
   );
 }

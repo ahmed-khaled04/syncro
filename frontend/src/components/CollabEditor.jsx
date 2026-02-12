@@ -68,12 +68,12 @@ export default function CollabEditor({
   useEffect(() => {
     if (!awareness) return;
 
-    awareness.setLocalStateField("typing", false);
+    awareness.setLocalStateField("editing", false);
 
     return () => {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       try {
-        awareness.setLocalStateField("typing", false);
+        awareness.setLocalStateField("editing", false);
       } catch {}
     };
   }, [awareness, fileId]);
@@ -106,12 +106,12 @@ export default function CollabEditor({
 
     if (!isUserTyping) return;
 
-    awareness.setLocalStateField("typing", true);
+    awareness.setLocalStateField("editing", true);
 
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(() => {
       try {
-        awareness.setLocalStateField("typing", false);
+        awareness.setLocalStateField("editing", false);
       } catch {}
     }, 900);
   };

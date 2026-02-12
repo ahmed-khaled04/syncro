@@ -1,3 +1,4 @@
+// server/src/server.js
 require("dotenv").config();
 
 const http = require("http");
@@ -8,10 +9,11 @@ const { corsOptions } = require("./config/cors");
 const { PORT } = require("./config/env");
 const { registerSocketServer } = require("./sockets");
 
-
 const { createPool, initDb } = require("./persistence/db");
 const { createSnapshotRepo } = require("./persistence/snapshotRepo");
 const { setSnapshotRepo } = require("./rooms/ydocStore");
+
+const { initRoomStore } = require("./rooms/roomStore");
 
 async function main() {
   const app = createApp();
@@ -23,6 +25,10 @@ async function main() {
   // init postgres
   const pool = createPool();
   await initDb(pool);
+
+  //allow roomStore to persist room settings
+  initRoomStore(pool);
+
   setSnapshotRepo(createSnapshotRepo(pool));
 
   server.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));

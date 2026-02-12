@@ -1,3 +1,4 @@
+// server/src/persistence/db.js
 const { Pool } = require("pg");
 
 function createPool() {
@@ -6,7 +7,24 @@ function createPool() {
 }
 
 async function initDb(pool) {
-  // Latest snapshot (fast resume)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.room_settings (
+      room_id TEXT PRIMARY KEY,
+      lang TEXT NOT NULL DEFAULT 'js',
+      locked BOOLEAN NOT NULL DEFAULT FALSE,
+      owner_id TEXT NULL,
+      editors JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_room_settings_updated_at
+    ON public.room_settings(updated_at);
+  `);
+
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.room_snapshots (
       room_id TEXT PRIMARY KEY,
@@ -20,12 +38,14 @@ async function initDb(pool) {
     ON public.room_snapshots(updated_at);
   `);
 
+  // -----------------------------
   // Version history (multiple rows)
+  // -----------------------------
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.room_snapshot_versions (
       id BIGSERIAL PRIMARY KEY,
       room_id TEXT NOT NULL,
-      file_id TEXT NOT NULL DEFAULT 'main',   -- ✅ NEW
+      file_id TEXT NOT NULL DEFAULT 'main',
       kind TEXT NOT NULL DEFAULT 'auto',
       label TEXT NULL,
       created_by TEXT NULL,
@@ -41,7 +61,6 @@ async function initDb(pool) {
     ADD COLUMN IF NOT EXISTS file_id TEXT NOT NULL DEFAULT 'main';
   `);
 
-  // Composite index for per-file history
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_room_versions_room_file_created
     ON public.room_snapshot_versions (room_id, file_id, created_at DESC);

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], locked = false }) {
+export default function OnlineUsers({
+  awareness,
+  ownerId,
+  allowedEditors = [],
+  locked = false,
+}) {
   const [users, setUsers] = useState([]);
 
   const myUserId = useMemo(() => {
@@ -19,7 +24,7 @@ export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], l
       const groups = new Map();
 
       for (const [clientId, s] of entries) {
-        const u = s.user || {};
+        const u = s?.user || {};
         const userId = u.id || `client:${clientId}`;
 
         if (!groups.has(userId)) {
@@ -27,27 +32,38 @@ export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], l
             userId,
             name: u.name || "Anonymous",
             color: u.color || "#888",
-            typing: false,
+            editing: false, // ✅ we use "editing" (set by CollabEditor)
           });
         }
 
         const g = groups.get(userId);
-        if (s.typing) g.typing = true;
 
-        if (!g.name && u.name) g.name = u.name;
+        // ✅ If any client instance is editing, show editing
+        if (s?.editing === true) g.editing = true;
+
+        // Keep best-known name/color
+        if ((!g.name || g.name === "Anonymous") && u.name) g.name = u.name;
         if ((!g.color || g.color === "#888") && u.color) g.color = u.color;
       }
 
-      let list = Array.from(groups.values()).map((g) => ({
-        id: g.userId,
-        name: g.name,
-        color: g.color,
-        typing: g.typing,
-        isOwner: ownerId && g.userId === ownerId,
-        isEditor: locked && allowedEditors.includes(g.userId),
-      }));
+      let list = Array.from(groups.values()).map((g) => {
+        const isOwner = !!ownerId && g.userId === ownerId;
+        const isEditor = !!locked && allowedEditors.includes(g.userId);
+        const isViewer = !!locked && !isOwner && !isEditor;
 
-      list = list.sort((a, b) => {
+        return {
+          id: g.userId,
+          name: g.name,
+          color: g.color,
+          editing: g.editing,
+          isOwner,
+          isEditor,
+          isViewer,
+        };
+      });
+
+      // Sort: Me -> Owner -> Editors -> Viewers
+      list.sort((a, b) => {
         const aMe = myUserId && a.id === myUserId ? 0 : 1;
         const bMe = myUserId && b.id === myUserId ? 0 : 1;
         if (aMe !== bMe) return aMe - bMe;
@@ -58,7 +74,9 @@ export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], l
 
         const aEditor = a.isEditor ? 0 : 1;
         const bEditor = b.isEditor ? 0 : 1;
-        return aEditor - bEditor;
+        if (aEditor !== bEditor) return aEditor - bEditor;
+
+        return String(a.name).localeCompare(String(b.name));
       });
 
       setUsers(list);
@@ -80,11 +98,20 @@ export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], l
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-zinc-400">
-          Online <span className="text-zinc-200 font-semibold">({users.length})</span>
+          Online{" "}
+          <span className="text-zinc-200 font-semibold">({users.length})</span>
         </span>
 
         {users.map((user) => {
           const isMe = myUserId && user.id === myUserId;
+
+          const roleBadge = user.isOwner
+            ? { label: "Owner", cls: "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/20" }
+            : user.isEditor
+            ? { label: "Editor", cls: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/20" }
+            : user.isViewer
+            ? { label: "Viewer", cls: "bg-zinc-800/60 text-zinc-200 ring-1 ring-zinc-700" }
+            : null; // unlocked room => no role labels needed
 
           return (
             <div
@@ -104,15 +131,16 @@ export default function OnlineUsers({ awareness, ownerId, allowedEditors = [], l
                 {user.name || "Anonymous"}
               </span>
 
-              {user.isOwner && (
-                <span className="ml-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/20">
-                  Owner
+              {/* typing / editing indicator */}
+              {user.editing && (
+                <span className="ml-1 rounded-full bg-indigo-500/15 px-2 py-0.5 text-[10px] font-semibold text-indigo-200 ring-1 ring-indigo-500/20">
+                  ✍️ typing
                 </span>
               )}
 
-              {user.isEditor && !user.isOwner && (
-                <span className="ml-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200 ring-1 ring-emerald-500/20">
-                  Editor
+              {roleBadge && (
+                <span className={["ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", roleBadge.cls].join(" ")}>
+                  {roleBadge.label}
                 </span>
               )}
 

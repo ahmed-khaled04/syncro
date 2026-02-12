@@ -1,6 +1,8 @@
+// server/src/sockets/handlers/roomHandlers.js
 const Y = require("yjs");
 
 const {
+  hydrateRoom,
   getRoomLang,
   setRoomLang,
   getRoomLocked,
@@ -55,6 +57,10 @@ function registerRoomHandlers(io, socket) {
     socket.data.userId = userId || null;
     socket.data.name = name || null;
 
+    // ✅ NEW: load persisted room settings into memory cache
+    await hydrateRoom(roomId);
+
+    // ensure owner after hydrate (so DB owner is respected)
     const ownerId = ensureRoomOwner(roomId, userId);
 
     // owner private room (for edit requests)
@@ -87,8 +93,9 @@ function registerRoomHandlers(io, socket) {
   });
 
   socket.on("set-room-language", ({ roomId, lang }) => {
+    // if not hydrated yet, no big deal; setRoomLang will cache + persist
     setRoomLang(roomId, lang);
-    io.to(roomId).emit("room-language", { roomId, lang });
+    io.to(roomId).emit("room-language", { roomId, lang: getRoomLang(roomId) });
   });
 
   // lock/unlock (owner only)
@@ -176,8 +183,7 @@ function registerRoomHandlers(io, socket) {
     doc.transact(() => {
       createFolder(doc, { parentId: parentId || "root", name: name || "folder" });
     }, "fs");
-    
-    // ✅ Broadcast the change to all clients
+
     broadcastUpdate(roomId);
   });
 
@@ -192,8 +198,7 @@ function registerRoomHandlers(io, socket) {
         initialContent: initialContent || "",
       });
     }, "fs");
-    
-    // ✅ Broadcast the change to all clients
+
     broadcastUpdate(roomId);
   });
 
@@ -205,8 +210,7 @@ function registerRoomHandlers(io, socket) {
     doc.transact(() => {
       renameNode(doc, { nodeId, name });
     }, "fs");
-    
-    // ✅ Broadcast the change to all clients
+
     broadcastUpdate(roomId);
   });
 
@@ -218,8 +222,7 @@ function registerRoomHandlers(io, socket) {
     doc.transact(() => {
       moveNode(doc, { nodeId, parentId });
     }, "fs");
-    
-    // ✅ Broadcast the change to all clients
+
     broadcastUpdate(roomId);
   });
 
@@ -231,15 +234,13 @@ function registerRoomHandlers(io, socket) {
     doc.transact(() => {
       deleteNodeRecursive(doc, nodeId);
     }, "fs");
-    
-    // ✅ Broadcast the change to all clients
+
     broadcastUpdate(roomId);
   });
 
   // -------------------------------
   // ✅ SNAPSHOTS PER FILE
   // -------------------------------
-
   socket.on("snapshots:list", async ({ roomId, fileId, limit = 50 }) => {
     const repo = getSnapshotRepo();
     if (!repo) return socket.emit("snapshots:list:result", { roomId, fileId, items: [] });
@@ -260,100 +261,77 @@ function registerRoomHandlers(io, socket) {
     if (!fileId) return;
 
     try {
-      const row = await repo.getVersion(roomId, fileId, Number(id));
-      if (!row) return;
-
-      socket.emit("snapshot:get:result", {
-        roomId,
-        fileId,
-        snapshot: {
-          id: row.id,
-          kind: row.kind,
-          label: row.label,
-          created_by: row.created_by,
-          created_at: row.created_at,
-          content: row.content,
-        },
-      });
+      const item = await repo.getVersion(roomId, fileId, id);
+      socket.emit("snapshot:get:result", { roomId, fileId, item: item || null });
     } catch (e) {
       console.warn("snapshot:get failed:", e);
+      socket.emit("snapshot:get:result", { roomId, fileId, item: null });
     }
   });
 
-  // milestone snapshot (owner only)
-  socket.on("snapshot:create", async ({ roomId, fileId, label }) => {
-    if (!isOwner(socket, roomId)) return;
-    if (!fileId) return;
-
+  socket.on("snapshot:create", async ({ roomId, fileId, kind = "milestone", label = null }) => {
     const repo = getSnapshotRepo();
     if (!repo) return;
+    if (!fileId) return;
+
+    // only editors can create snapshots when locked
+    if (!canEdit(socket, roomId)) return;
 
     try {
-      const doc = getRoomDoc(roomId);
-      const files = doc.getMap("files");
-      const ytext = files.get(fileId);
-      if (!ytext) return;
-
-      const content = ytext.toString();
-      const update = Y.encodeStateAsUpdate(doc);
-
-      await repo.createVersion({
-        roomId,
-        fileId,
-        kind: "milestone",
-        label: label || "Milestone",
-        createdBy: socket.data.userId || null,
-        snapshotBuffer: Buffer.from(update),
-        content,
+      const createdBy = socket.data.userId || null;
+      const item = await repo.createMilestoneFromRoom(roomId, fileId, {
+        label,
+        createdBy,
       });
-
-      io.to(roomId).emit("system", `📌 Milestone snapshot created.`);
+      socket.emit("snapshot:create:result", { roomId, fileId, ok: true, item });
     } catch (e) {
       console.warn("snapshot:create failed:", e);
+      socket.emit("snapshot:create:result", { roomId, fileId, ok: false });
     }
   });
 
-  // restore snapshot (owner only)
   socket.on("snapshot:restore", async ({ roomId, fileId, id }) => {
-    if (!isOwner(socket, roomId)) return;
-    if (!fileId) return;
-
     const repo = getSnapshotRepo();
     if (!repo) return;
+    if (!fileId) return;
+
+    // only owner can restore when locked
+    if (getRoomLocked(roomId) && !isOwner(socket, roomId)) return;
 
     try {
-      const row = await repo.getVersion(roomId, fileId, Number(id));
-      if (!row) return;
+      const content = await repo.getContent(roomId, fileId, id);
+      if (typeof content !== "string") return;
 
       const doc = getRoomDoc(roomId);
-      const files = doc.getMap("files");
-      const ytext = files.get(fileId);
-      if (!ytext) return;
 
+      // update the target file text in ydoc fs map
       doc.transact(() => {
+        const fsTexts = doc.getMap("fs:texts");
+        let ytext = fsTexts.get(fileId);
+        if (!ytext) {
+          ytext = new Y.Text();
+          fsTexts.set(fileId, ytext);
+        }
         ytext.delete(0, ytext.length);
-        ytext.insert(0, row.content);
-      }, "restore");
+        ytext.insert(0, content);
+      }, "snapshot-restore");
 
-      // Broadcast full sync so everyone converges quickly
-      const full = Y.encodeStateAsUpdate(doc);
-      io.to(roomId).emit("y-sync", { update: Array.from(full) });
+      broadcastUpdate(roomId);
 
-      io.to(roomId).emit("system", `⏪ Snapshot restored by owner.`);
+      socket.emit("snapshot:restore:result", { roomId, fileId, ok: true });
     } catch (e) {
       console.warn("snapshot:restore failed:", e);
+      socket.emit("snapshot:restore:result", { roomId, fileId, ok: false });
     }
   });
 
   socket.on("disconnecting", () => {
-    for (const rid of socket.rooms) {
-      if (rid === socket.id) continue;
-
-      setTimeout(() => {
-        const room = io.sockets.adapter.rooms.get(rid);
-        const size = room ? room.size : 0;
-        if (size === 0) scheduleRoomCleanup(rid);
-      }, 0);
+    for (const roomId of socket.rooms) {
+      if (roomId === socket.id) continue;
+      // schedule cleanup if room empties
+      const room = io.sockets.adapter.rooms.get(roomId);
+      const size = room ? room.size : 0;
+      if (size <= 1) scheduleRoomCleanup(roomId);
     }
   });
 }

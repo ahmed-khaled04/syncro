@@ -96,12 +96,21 @@ export function TextInputModal({
   confirmText = "Confirm",
   cancelText = "Cancel",
   dangerous = false,
+
+  // ✅ validation UI
+  error = "",
+  disableConfirm = false,
+
+  // ✅ NEW: allow parent to validate live
+  onValueChange,
 }) {
   const [value, setValue] = useState(defaultValue);
   const inputRef = useRef(null);
 
   useEffect(() => {
     setValue(defaultValue);
+    onValueChange?.(defaultValue);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultValue, open]);
 
   useEffect(() => {
@@ -116,6 +125,7 @@ export function TextInputModal({
   if (!open) return null;
 
   const handleConfirm = () => {
+    if (disableConfirm) return;
     onConfirm?.(value);
   };
 
@@ -139,24 +149,41 @@ export function TextInputModal({
         )}
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className="p-5 space-y-3">
         {label && (
           <div className="text-xs font-semibold text-zinc-300">{label}</div>
         )}
+
         <input
           ref={inputRef}
           type="text"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setValue(next);
+            onValueChange?.(next); // ✅ live notify
+          }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/40"
+          className={[
+            "w-full rounded-xl border bg-zinc-900/30 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500",
+            "focus:outline-none focus:ring-2 focus:border-indigo-500/40",
+            error ? "border-rose-500/50 focus:ring-rose-500/20" : "border-zinc-800 focus:ring-indigo-500/20",
+          ].join(" ")}
         />
+
+        {error ? (
+          <div className="text-xs text-rose-300">{error}</div>
+        ) : (
+          <div className="text-[11px] text-zinc-500">
+            Press <span className="text-zinc-300">Enter</span> to confirm,{" "}
+            <span className="text-zinc-300">Esc</span> to cancel.
+          </div>
+        )}
 
         <div className="flex items-center justify-end gap-2 pt-4">
           <SecondaryButton onClick={onCancel}>{cancelText}</SecondaryButton>
-          <ButtonComponent onClick={handleConfirm}>
+          <ButtonComponent onClick={handleConfirm} disabled={disableConfirm}>
             {confirmText}
           </ButtonComponent>
         </div>
@@ -192,9 +219,7 @@ export function ConfirmModal({
       <div className="p-5">
         <div className="flex items-center justify-end gap-2">
           <SecondaryButton onClick={onCancel}>{cancelText}</SecondaryButton>
-          <ButtonComponent onClick={onConfirm}>
-            {confirmText}
-          </ButtonComponent>
+          <ButtonComponent onClick={onConfirm}>{confirmText}</ButtonComponent>
         </div>
       </div>
     </ModalShell>

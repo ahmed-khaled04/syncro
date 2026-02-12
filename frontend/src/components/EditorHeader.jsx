@@ -211,6 +211,7 @@ export default function EditorHeader({
 
   onClearRequest,
   onClearAllRequests,
+  onExport,
 }) {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
@@ -335,6 +336,10 @@ export default function EditorHeader({
                   ⬇ Download
                 </PillButton>
 
+                <PillButton onClick={onExport} title="Export project as ZIP">
+                  📦 Export
+                </PillButton>
+
                 <PillButton
                   disabled={!youAreOwner}
                   onClick={() => onToggleLock?.(!locked)}
@@ -354,8 +359,6 @@ export default function EditorHeader({
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <OnlineUsers awareness={awareness} ownerId={ownerId} allowedEditors={allowedEditors} locked={locked} />
-            <label className="text-xs font-medium text-zinc-400">Language</label>
-            <LanguageDropdown value={lang} onChange={onChangeLang} />
           </div>
         </div>
 
