@@ -5,6 +5,7 @@ import { useRoomLanguage } from "../hooks/useRoomLanguage";
 import { useYjsSync } from "../hooks/useYjsSync";
 import EditorHeader from "../components/EditorHeader";
 import CollabEditor from "../components/CollabEditor";
+import FileExplorer from "../components/FileExplorer";
 import SnapshotPanel from "../components/SnapshotPanel";
 
 export default function RoomPage() {
@@ -15,7 +16,7 @@ export default function RoomPage() {
 
   if (!name) return <Navigate to="/" replace />;
 
-  const { ytext, awareness, synced, ready } = useYjsSync(socket, roomId, name);
+  const { ydoc, awareness, synced, ready } = useYjsSync(socket, roomId, name);
   const { lang, setRoomLanguage } = useRoomLanguage(socket, roomId, "js");
 
   const [connected, setConnected] = useState(socket.connected);
@@ -32,11 +33,64 @@ export default function RoomPage() {
   const [ownerId, setOwnerId] = useState(null);
   const [youAreOwner, setYouAreOwner] = useState(false);
 
-  const [allowedEditors, setAllowedEditors] = useState([]); // userIds
-  const [editRequests, setEditRequests] = useState([]); // owner UI
+  const [allowedEditors, setAllowedEditors] = useState([]);
+  const [editRequests, setEditRequests] = useState([]);
 
-  // ✅ user directory: userId -> name (from awareness + requests)
   const [userDirectory, setUserDirectory] = useState({});
+
+  // ✅ fileId, not a filename, and start null (no fake "main")
+  const [selectedFileId, setSelectedFileId] = useState(null);
+
+  const ytext = useMemo(() => {
+    if (!ydoc || !selectedFileId) return null;
+    const files = ydoc.getMap("files");
+    return files.get(selectedFileId) || null;
+  }, [ydoc, selectedFileId]);
+
+  // ✅ Human-readable filename for header (optional)
+  const selectedFileName = useMemo(() => {
+    if (!ydoc || !selectedFileId) return null;
+    const nodes = ydoc.getMap("fs:nodes");
+    for (const [, node] of nodes.entries()) {
+      if (node?.get("type") === "file" && node.get("fileId") === selectedFileId) {
+        return node.get("name") || selectedFileId;
+      }
+    }
+    return selectedFileId;
+  }, [ydoc, selectedFileId]);
+
+  // ✅ Auto-select first real file once FS loads / if selection becomes invalid
+  useEffect(() => {
+    if (!ydoc) return;
+
+    const nodes = ydoc.getMap("fs:nodes");
+    const files = ydoc.getMap("files");
+
+    const ensureValidSelection = () => {
+      if (selectedFileId && files.get(selectedFileId)) return;
+
+      for (const [, node] of nodes.entries()) {
+        if (node?.get("type") === "file") {
+          const fid = node.get("fileId");
+          if (fid && files.get(fid)) {
+            setSelectedFileId(fid);
+            return;
+          }
+        }
+      }
+
+      setSelectedFileId(null);
+    };
+
+    ensureValidSelection();
+    nodes.observeDeep(ensureValidSelection);
+    files.observeDeep(ensureValidSelection);
+
+    return () => {
+      nodes.unobserveDeep(ensureValidSelection);
+      files.unobserveDeep(ensureValidSelection);
+    };
+  }, [ydoc, selectedFileId]);
 
   // lock updates
   useEffect(() => {
@@ -75,7 +129,6 @@ export default function RoomPage() {
         return [{ id, ...payload }, ...prev].slice(0, 6);
       });
 
-      // ✅ keep name in directory (even if requester leaves later)
       const rid = payload.requester?.id;
       const rname = payload.requester?.name;
       if (rid && rname) {
@@ -97,7 +150,6 @@ export default function RoomPage() {
         const u = s?.user;
         if (u?.id && u?.name) next[u.id] = u.name;
       }
-      // merge to keep any old request names too
       setUserDirectory((prev) => ({ ...prev, ...next }));
     };
 
@@ -185,7 +237,7 @@ export default function RoomPage() {
           youAreOwner={youAreOwner}
           hasEditAccess={hasEditAccess}
           allowedEditors={allowedEditors}
-          userDirectory={userDirectory}   // ✅ NEW
+          userDirectory={userDirectory}
           editRequests={editRequests}
           onRequestEdit={() => socket.emit("request-edit", { roomId })}
           onToggleLock={(next) => socket.emit("set-room-lock", { roomId, locked: next })}
@@ -195,27 +247,56 @@ export default function RoomPage() {
           onClearAllRequests={() => setEditRequests([])}
         />
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center justify-between gap-3">
           <div className="text-xs text-zinc-500">
-            History: auto snapshots every few minutes + owner milestones.
+            Active file:{" "}
+            <span className="font-mono text-zinc-300">
+              {selectedFileName || "(none)"}
+            </span>
           </div>
 
           <SnapshotPanel
             socket={socket}
             roomId={roomId}
+            fileId={selectedFileId}
             ytext={ytext}
             youAreOwner={youAreOwner}
             ownerId={ownerId}
           />
         </div>
 
-        <div className="relative mt-6 mb-4">
+        <div className="relative mt-2 mb-2">
           <div className="pointer-events-none absolute inset-x-10 -top-2 h-10 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent blur-2xl" />
           <div className="pointer-events-none mx-auto h-px w-2/3 bg-gradient-to-r from-transparent via-zinc-700/60 to-transparent" />
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-2xl overflow-hidden">
-          <CollabEditor lang={lang} ytext={ytext} awareness={awareness} readOnly={readOnly} />
+        <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
+          <div className="h-[520px] lg:h-[620px]">
+            <FileExplorer
+              ydoc={ydoc}
+              socket={socket}
+              roomId={roomId}
+              canEdit={hasEditAccess}
+              selectedFileId={selectedFileId}
+              onSelectFile={(fid) => setSelectedFileId(fid)}
+            />
+          </div>
+
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 shadow-2xl overflow-hidden">
+            {ytext ? (
+              <CollabEditor
+                lang={lang}
+                fileId={selectedFileId}
+                ytext={ytext}
+                awareness={awareness}
+                readOnly={readOnly}
+              />
+            ) : (
+              <div className="h-[520px] lg:h-[620px] flex items-center justify-center text-sm text-zinc-400">
+                {ydoc ? "Loading file…" : "Joining room…"}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

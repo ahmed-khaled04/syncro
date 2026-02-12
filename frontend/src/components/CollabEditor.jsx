@@ -43,13 +43,31 @@ const editorPadding = EditorView.theme({
   },
 });
 
-export default function CollabEditor({ lang, ytext, awareness, readOnly = false }) {
+export default function CollabEditor({
+  lang,
+  fileId,          //REQUIRED: used to remount editor
+  ytext,
+  awareness,
+  readOnly = false,
+}) {
   const typingTimerRef = useRef(null);
+
+  //keep one UndoManager per file (per ytext)
+  const undoRef = useRef(null);
+  useEffect(() => {
+    if (!ytext) return;
+    undoRef.current = new Y.UndoManager(ytext);
+    return () => {
+      try {
+        undoRef.current?.destroy?.();
+      } catch {}
+      undoRef.current = null;
+    };
+  }, [ytext]);
 
   useEffect(() => {
     if (!awareness) return;
 
-    // always reset typing on mount/change
     awareness.setLocalStateField("typing", false);
 
     return () => {
@@ -58,7 +76,7 @@ export default function CollabEditor({ lang, ytext, awareness, readOnly = false 
         awareness.setLocalStateField("typing", false);
       } catch {}
     };
-  }, [awareness]);
+  }, [awareness, fileId]);
 
   const extensions = useMemo(() => {
     const langExt = LANGS[lang]?.ext ? LANGS[lang].ext() : LANGS.js.ext();
@@ -68,18 +86,22 @@ export default function CollabEditor({ lang, ytext, awareness, readOnly = false 
       presenceTheme,
       editorPadding,
       EditorView.editable.of(!readOnly),
+
       yCollab(ytext, awareness, {
-        undoManager: new Y.UndoManager(ytext),
+        undoManager: undoRef.current || new Y.UndoManager(ytext),
       }),
     ];
   }, [lang, ytext, awareness, readOnly]);
 
   const onChange = (_value, viewUpdate) => {
     if (!awareness) return;
-    if (readOnly) return; // ✅ viewers never “type”
+    if (readOnly) return;
 
-    const isUserTyping = viewUpdate?.transactions?.some((tr) =>
-      tr.isUserEvent("input") || tr.isUserEvent("delete") || tr.isUserEvent("paste")
+    const isUserTyping = viewUpdate?.transactions?.some(
+      (tr) =>
+        tr.isUserEvent("input") ||
+        tr.isUserEvent("delete") ||
+        tr.isUserEvent("paste")
     );
 
     if (!isUserTyping) return;
@@ -94,10 +116,15 @@ export default function CollabEditor({ lang, ytext, awareness, readOnly = false 
     }, 900);
   };
 
+  // ✅ Extract initial content from Y.Text so CodeMirror displays it on mount
+  const initialContent = ytext ? ytext.toString() : "";
+
   return (
     <CodeMirror
+      key={fileId || "no-file"}
       height="420px"
       theme={oneDark}
+      value={initialContent}
       extensions={extensions}
       onChange={onChange}
     />

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { diffLines } from "diff";
+import {
+  ModalShell,
+  SecondaryButton,
+  DangerButton,
+  TextInputModal,
+  ConfirmModal,
+} from "./DialogComponents";
 
 /* ---------------- helpers ---------------- */
 
@@ -94,24 +101,6 @@ function downloadTextFile(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-/* ---------------- UI building blocks ---------------- */
-
-function ModalShell({ children, className = "" }) {
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/70" />
-      <div
-        className={
-          "relative w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden " +
-          className
-        }
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
 function PrimaryButton({ children, className = "", ...props }) {
   return (
     <button
@@ -121,40 +110,6 @@ function PrimaryButton({ children, className = "", ...props }) {
         "bg-indigo-500/15 border border-indigo-500/30 text-indigo-100 " +
         "hover:bg-indigo-500/25 hover:border-indigo-500/45 transition " +
         "focus:outline-none focus:ring-2 focus:ring-indigo-500/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-function SecondaryButton({ children, className = "", ...props }) {
-  return (
-    <button
-      {...props}
-      className={
-        "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold " +
-        "bg-zinc-900/40 border border-zinc-800 text-zinc-200 " +
-        "hover:bg-zinc-800/40 transition " +
-        "focus:outline-none focus:ring-2 focus:ring-zinc-500/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-function DangerButton({ children, className = "", ...props }) {
-  return (
-    <button
-      {...props}
-      className={
-        "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold " +
-        "bg-rose-500/12 border border-rose-500/30 text-rose-100 " +
-        "hover:bg-rose-500/20 hover:border-rose-500/45 transition " +
-        "focus:outline-none focus:ring-2 focus:ring-rose-500/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed " +
         className
       }
     >
@@ -257,7 +212,15 @@ function SideBySideDiff({ beforeText, afterText, leftTitle = "LEFT", rightTitle 
 
 /* ---------------- main component ---------------- */
 
-export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, ownerId }) {
+// ✅ ADDED: fileId prop
+export default function SnapshotPanel({
+  socket,
+  roomId,
+  fileId,      // ✅ per-file history key
+  ytext,
+  youAreOwner,
+  ownerId,
+}) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -282,7 +245,11 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
 
   const pendingSingleIdRef = useRef(null);
   const pendingCompareRef = useRef({ a: null, b: null });
+
+  // ✅ per-file cache
+  // key = `${roomId}:${fileId}:${id}`
   const cacheRef = useRef(new Map());
+  const cacheKey = (id) => `${roomId || ""}:${fileId || ""}:${String(id)}`;
 
   // dialogs
   const [milestoneOpen, setMilestoneOpen] = useState(false);
@@ -331,26 +298,47 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
     };
   }, [ytext]);
 
+  // ✅ IMPORTANT: when file changes, clear compare state + selected to avoid mixing files
+  useEffect(() => {
+    // file switched -> reset UI state that depends on the file
+    setItems([]);
+    setSelected(null);
+    setDiffOpen(false);
+
+    setCompareAId(null);
+    setCompareBId(null);
+    setCompareA(null);
+    setCompareB(null);
+    pendingSingleIdRef.current = null;
+    pendingCompareRef.current = { a: null, b: null };
+
+    // Optional: clear cache for old file to save memory
+    // (you can comment this out if you want cross-file cache)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, roomId]);
+
   const refresh = () => {
-    if (!socket || !roomId) return;
+    if (!socket || !roomId || !fileId) return;
     setLoading(true);
-    socket.emit("snapshots:list", { roomId, limit: 150 });
+    socket.emit("snapshots:list", { roomId, fileId, limit: 150 });
   };
 
   useEffect(() => {
     if (!socket) return;
 
-    const onList = ({ roomId: rid, items: list }) => {
+    const onList = ({ roomId: rid, fileId: fid, items: list }) => {
       if (rid !== roomId) return;
+      if (fid !== fileId) return;
       setItems(Array.isArray(list) ? list : []);
       setLoading(false);
     };
 
-    const onGet = ({ roomId: rid, snapshot }) => {
+    const onGet = ({ roomId: rid, fileId: fid, snapshot }) => {
       if (rid !== roomId) return;
+      if (fid !== fileId) return;
       if (!snapshot) return;
 
-      cacheRef.current.set(snapshot.id, snapshot);
+      cacheRef.current.set(cacheKey(snapshot.id), snapshot);
 
       if (pendingSingleIdRef.current && pendingSingleIdRef.current === snapshot.id) {
         pendingSingleIdRef.current = null;
@@ -372,8 +360,8 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
       }
       pendingCompareRef.current = pend;
 
-      const aReady = compareAId ? cacheRef.current.get(compareAId) : null;
-      const bReady = compareBId ? cacheRef.current.get(compareBId) : null;
+      const aReady = compareAId ? cacheRef.current.get(cacheKey(compareAId)) : null;
+      const bReady = compareBId ? cacheRef.current.get(cacheKey(compareBId)) : null;
       if (aReady && bReady) {
         setCompareA(aReady);
         setCompareB(bReady);
@@ -382,8 +370,9 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
       }
     };
 
-    const onRestoreDone = ({ roomId: rid, restoredId, safetyId }) => {
+    const onRestoreDone = ({ roomId: rid, fileId: fid, restoredId, safetyId }) => {
       if (rid !== roomId) return;
+      if (fid !== fileId) return;
       showToast({
         title: "Snapshot restored",
         body: safetyId
@@ -402,23 +391,23 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
       socket.off("snapshot:get:result", onGet);
       socket.off("snapshot:restore:done", onRestoreDone);
     };
-  }, [socket, roomId, compareAId, compareBId]);
+  }, [socket, roomId, fileId, compareAId, compareBId]);
 
   useEffect(() => {
     if (!open) return;
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, fileId]);
 
   const fetchSnapshot = (id) => {
-    if (!socket || !roomId) return;
-    socket.emit("snapshot:get", { roomId, id });
+    if (!socket || !roomId || !fileId) return;
+    socket.emit("snapshot:get", { roomId, fileId, id });
   };
 
   const viewDiff = (id) => {
-    if (!socket || !roomId) return;
+    if (!socket || !roomId || !fileId) return;
 
-    const cached = cacheRef.current.get(id);
+    const cached = cacheRef.current.get(cacheKey(id));
     setWorking(true);
     setDiffMode("single");
 
@@ -443,11 +432,11 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   };
 
   const pickCompare = (id) => {
-    if (!socket || !roomId) return;
+    if (!socket || !roomId || !fileId) return;
 
     if (!compareAId) {
       setCompareAId(id);
-      const cached = cacheRef.current.get(id);
+      const cached = cacheRef.current.get(cacheKey(id));
       if (cached?.content != null) {
         setCompareA(cached);
       } else {
@@ -463,10 +452,10 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
     }
 
     setCompareBId(id);
-    const cachedB = cacheRef.current.get(id);
+    const cachedB = cacheRef.current.get(cacheKey(id));
     if (cachedB?.content != null) {
       setCompareB(cachedB);
-      const a = cacheRef.current.get(compareAId);
+      const a = cacheRef.current.get(cacheKey(compareAId));
       if (a?.content != null) {
         setCompareA(a);
         setDiffMode("compare");
@@ -480,7 +469,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
 
   const compareWithCurrent = () => {
     if (!compareAId) return;
-    const a = cacheRef.current.get(compareAId) || compareA;
+    const a = cacheRef.current.get(cacheKey(compareAId)) || compareA;
     if (!a?.content) return;
 
     const current = {
@@ -504,10 +493,10 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   };
 
   const doRestore = async () => {
-    if (!socket || !roomId || !youAreOwner || !restoreTargetId) return;
+    if (!socket || !roomId || !fileId || !youAreOwner || !restoreTargetId) return;
     setRestoreWorking(true);
 
-    socket.emit("snapshot:restore", { roomId, id: restoreTargetId });
+    socket.emit("snapshot:restore", { roomId, fileId, id: restoreTargetId });
 
     setRestoreOpen(false);
     setRestoreTargetId(null);
@@ -526,10 +515,14 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   };
 
   const doCreateMilestone = async () => {
-    if (!socket || !roomId || !youAreOwner) return;
+    if (!socket || !roomId || !fileId || !youAreOwner) return;
     setMilestoneSaving(true);
 
-    socket.emit("snapshot:create", { roomId, label: milestoneLabel?.trim() || "Milestone" });
+    socket.emit("snapshot:create", {
+      roomId,
+      fileId,
+      label: milestoneLabel?.trim() || "Milestone",
+    });
 
     setTimeout(() => {
       setMilestoneSaving(false);
@@ -552,13 +545,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
 
       if (!q) return true;
 
-      const hay = [
-        it.id,
-        it.kind,
-        it.label,
-        it.created_by,
-        formatTime(it.created_at),
-      ]
+      const hay = [it.id, it.kind, it.label, it.created_by, formatTime(it.created_at)]
         .map((x) => safeLower(x))
         .join(" ");
 
@@ -595,11 +582,12 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
           ? `Compare: ${labelOf(compareA)} ↔ ${labelOf(compareB)}`
           : "Compare";
 
-  // ✅ Export helpers for diff
+  // ✅ Export helpers for diff (per-file filenames)
   const exportLeft = () => {
-    const name = diffMode === "single"
-      ? `snapshot-${selected?.id || "unknown"}`
-      : `A-${compareA?.id || "unknown"}`;
+    const name =
+      diffMode === "single"
+        ? `file-${fileId}-snapshot-${selected?.id || "unknown"}`
+        : `file-${fileId}-A-${compareA?.id || "unknown"}`;
     downloadTextFile(`${name}.txt`, diffLeft);
     showToast({ title: "Downloaded", body: `${name}.txt` });
   };
@@ -607,22 +595,28 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   const exportRight = () => {
     const name =
       diffMode === "single"
-        ? `current`
+        ? `file-${fileId}-current`
         : diffMode === "compareCurrent"
-          ? `current`
-          : `B-${compareB?.id || "unknown"}`;
+          ? `file-${fileId}-current`
+          : `file-${fileId}-B-${compareB?.id || "unknown"}`;
     downloadTextFile(`${name}.txt`, diffRight);
     showToast({ title: "Downloaded", body: `${name}.txt` });
   };
 
   const copyLeft = async () => {
     const ok = await copyToClipboard(diffLeft);
-    showToast({ title: ok ? "Copied" : "Copy failed", body: ok ? "LEFT copied to clipboard" : "Browser blocked clipboard" });
+    showToast({
+      title: ok ? "Copied" : "Copy failed",
+      body: ok ? "LEFT copied to clipboard" : "Browser blocked clipboard",
+    });
   };
 
   const copyRight = async () => {
     const ok = await copyToClipboard(diffRight);
-    showToast({ title: ok ? "Copied" : "Copy failed", body: ok ? "RIGHT copied to clipboard" : "Browser blocked clipboard" });
+    showToast({
+      title: ok ? "Copied" : "Copy failed",
+      body: ok ? "RIGHT copied to clipboard" : "Browser blocked clipboard",
+    });
   };
 
   return (
@@ -652,10 +646,11 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
         <button
           type="button"
           onClick={() => setOpen(true)}
+          disabled={!fileId}
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm font-semibold text-zinc-200
                      hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500/20 active:scale-[0.98]"
-          title="Version history"
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500/20 active:scale-[0.98] disabled:opacity-50"
+          title={!fileId ? "Select a file first" : "Version history"}
         >
           <span className="text-base">🕘</span>
           History
@@ -665,10 +660,11 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
           <button
             type="button"
             onClick={openMilestoneDialog}
+            disabled={!fileId}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm font-semibold text-zinc-200
                        hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-100 transition
-                       focus:outline-none focus:ring-2 focus:ring-emerald-500/20 active:scale-[0.98]"
-            title="Create a milestone snapshot"
+                       focus:outline-none focus:ring-2 focus:ring-emerald-500/20 active:scale-[0.98] disabled:opacity-50"
+            title={!fileId ? "Select a file first" : "Create a milestone snapshot"}
           >
             <span className="text-base">📌</span>
             Milestone
@@ -685,14 +681,24 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
             <div className="flex items-center justify-between p-4 border-b border-zinc-800">
               <div>
                 <div className="text-sm font-semibold">Version history</div>
-                <div className="text-xs text-zinc-500">Room #{roomId}</div>
+                <div className="text-xs text-zinc-500">
+                  Room #{roomId}{" "}
+                  {fileId ? (
+                    <>
+                      • File <span className="font-mono text-zinc-300">{fileId}</span>
+                    </>
+                  ) : (
+                    <span className="text-rose-200/90">• No file selected</span>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={refresh}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800/40 transition"
+                  disabled={!fileId}
+                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800/40 transition disabled:opacity-50"
                 >
                   {loading ? "Loading…" : "Refresh"}
                 </button>
@@ -716,7 +722,13 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                 </div>
               </div>
 
-              {/* ✅ Search + Filter */}
+              {!fileId && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-300">
+                  Select a file in your explorer to view its history.
+                </div>
+              )}
+
+              {/* Search + Filter */}
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/25 p-3 space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
@@ -801,6 +813,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                           type="button"
                           onClick={() => viewDiff(it.id)}
                           className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition"
+                          disabled={!fileId}
                         >
                           {working ? "…" : "Diff"}
                         </button>
@@ -816,6 +829,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
                                 : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/40")
                           }
+                          disabled={!fileId}
                         >
                           {!compareAId
                             ? "Compare (A)"
@@ -838,8 +852,9 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                   <button
                     type="button"
                     onClick={openMilestoneDialog}
+                    disabled={!fileId}
                     className="w-full rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-sm font-semibold text-zinc-200
-                               hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-100 transition"
+                               hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-100 transition disabled:opacity-50"
                   >
                     📌 Create milestone
                   </button>
@@ -856,9 +871,11 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
           <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur">
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">{diffTitle}</div>
+              <div className="mt-1 text-[11px] text-zinc-500">
+                File: <span className="font-mono text-zinc-300">{fileId}</span>
+              </div>
             </div>
 
-            {/* ✅ Export actions */}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -947,7 +964,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-zinc-100">Restore this snapshot?</div>
                 <div className="mt-1 text-xs text-zinc-500">
-                  This will overwrite the current editor content for everyone in the room.
+                  This will overwrite the current file content for everyone in the room.
                 </div>
               </div>
             </div>

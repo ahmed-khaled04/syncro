@@ -25,18 +25,26 @@ async function initDb(pool) {
     CREATE TABLE IF NOT EXISTS public.room_snapshot_versions (
       id BIGSERIAL PRIMARY KEY,
       room_id TEXT NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'auto',          -- 'auto' | 'milestone'
-      label TEXT NULL,                           -- optional label for milestone
-      created_by TEXT NULL,                      -- owner userId or null
-      snapshot BYTEA NOT NULL,                   -- Yjs state update (optional use)
-      content TEXT NOT NULL,                     -- plain text for restore + diff
+      file_id TEXT NOT NULL DEFAULT 'main',   -- ✅ NEW
+      kind TEXT NOT NULL DEFAULT 'auto',
+      label TEXT NULL,
+      created_by TEXT NULL,
+      snapshot BYTEA NOT NULL,
+      content TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 
+  // Ensure file_id column exists (for existing DBs)
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS room_snapshot_versions_room_id_created_at_idx
-    ON public.room_snapshot_versions(room_id, created_at DESC);
+    ALTER TABLE public.room_snapshot_versions
+    ADD COLUMN IF NOT EXISTS file_id TEXT NOT NULL DEFAULT 'main';
+  `);
+
+  // Composite index for per-file history
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_room_versions_room_file_created
+    ON public.room_snapshot_versions (room_id, file_id, created_at DESC);
   `);
 }
 

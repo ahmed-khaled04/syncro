@@ -1,12 +1,14 @@
 const Y = require("yjs");
+const crypto = require("crypto");
 
-const roomDocs = new Map();          // roomId -> Y.Doc
-const roomReady = new Map();         // roomId -> Promise<void>
-const cleanupTimers = new Map();     // roomId -> Timeout
-const saveTimers = new Map();        // roomId -> Timeout
+const roomDocs = new Map();      // roomId -> Y.Doc
+const roomReady = new Map();     // roomId -> Promise<void>
+const cleanupTimers = new Map(); // roomId -> Timeout
+const saveTimers = new Map();    // roomId -> Timeout
 
-const versionTimers = new Map();       // roomId -> Timeout
-const lastVersionContent = new Map();  // roomId -> string
+// auto versioning
+const versionTimers = new Map();      // roomId -> Timeout
+const lastVersionContent = new Map(); // `${roomId}:${fileId}` -> string
 
 let snapshotRepo = null;
 function setSnapshotRepo(repo) {
@@ -26,9 +28,50 @@ function getIntervalMs() {
   return Number.isFinite(v) ? v : 5 * 60 * 1000; // 5 min
 }
 
-function getMaxAutoVersions() {
-  const v = Number(process.env.SNAPSHOT_MAX_AUTO);
-  return Number.isFinite(v) ? v : 200;
+/* ---------------------------
+   FILE SYSTEM (Yjs structure)
+   ---------------------------
+   doc.getMap("fs:nodes") : nodeId -> Y.Map({ id,type,name,parentId,fileId,createdAt })
+   doc.getMap("files")    : fileId -> Y.Text
+*/
+function ensureFsDefaults(doc) {
+  const nodes = doc.getMap("fs:nodes");
+  const files = doc.getMap("files");
+
+  // root folder
+  if (!nodes.has("root")) {
+    const root = new Y.Map();
+    root.set("id", "root");
+    root.set("type", "folder");
+    root.set("name", "root");
+    root.set("parentId", null);
+    root.set("createdAt", Date.now());
+    nodes.set("root", root);
+  }
+
+  // default file: main.js
+  if (!nodes.has("node:main")) {
+    const fileId = "main";
+    if (!files.has(fileId)) {
+      const t = new Y.Text();
+      t.insert(0, "// Welcome to Syncro 👋\n\nconsole.log('main.js');\n");
+      files.set(fileId, t);
+    }
+
+    const n = new Y.Map();
+    n.set("id", "node:main");
+    n.set("type", "file");
+    n.set("name", "main.js");
+    n.set("parentId", "root");
+    n.set("fileId", fileId);
+    n.set("createdAt", Date.now());
+    nodes.set("node:main", n);
+  }
+}
+
+function getAllFileIds(doc) {
+  const files = doc.getMap("files");
+  return Array.from(files.keys());
 }
 
 function startVersionTimer(roomId, doc) {
@@ -37,31 +80,31 @@ function startVersionTimer(roomId, doc) {
 
   const tick = async () => {
     try {
-      const ytext = doc.getText("codemirror");
-      const content = ytext.toString();
-      const prev = lastVersionContent.get(roomId);
+      // iterate all files, only version if content changed
+      const files = doc.getMap("files");
+      for (const fileId of files.keys()) {
+        const ytext = files.get(fileId);
+        if (!ytext || typeof ytext.toString !== "function") continue;
 
-      // Only create a version if content changed
-      if (prev !== content) {
-        const update = Y.encodeStateAsUpdate(doc);
+        const content = ytext.toString();
+        const key = `${roomId}:${fileId}`;
+        const prev = lastVersionContent.get(key);
 
-        await snapshotRepo.createVersion({
-          roomId,
-          kind: "auto",
-          label: null,
-          createdBy: null,
-          snapshotBuffer: Buffer.from(update),
-          content,
-        });
+        if (prev !== content) {
+          const update = Y.encodeStateAsUpdate(doc);
 
-        // ✅ NEW: keep only the most recent N auto snapshots
-        // (milestones are untouched)
-        if (typeof snapshotRepo.pruneAutoVersions === "function") {
-          await snapshotRepo.pruneAutoVersions(roomId, getMaxAutoVersions());
+          await snapshotRepo.createVersion({
+            roomId,
+            fileId,
+            kind: "auto",
+            label: null,
+            createdBy: null,
+            snapshotBuffer: Buffer.from(update),
+            content,
+          });
+
+          lastVersionContent.set(key, content);
         }
-
-        lastVersionContent.set(roomId, content);
-        console.log(`🕒 Auto version snapshot saved: ${roomId}`);
       }
     } catch (e) {
       console.warn(`⚠️ Auto version snapshot failed for ${roomId}:`, e);
@@ -77,17 +120,21 @@ function stopVersionTimer(roomId) {
   const t = versionTimers.get(roomId);
   if (t) clearTimeout(t);
   versionTimers.delete(roomId);
-  lastVersionContent.delete(roomId);
+
+  // cleanup lastVersionContent keys for that room
+  for (const k of lastVersionContent.keys()) {
+    if (k.startsWith(`${roomId}:`)) lastVersionContent.delete(k);
+  }
 }
 
 function ensureRoomCreated(roomId) {
   if (roomDocs.has(roomId)) return;
 
   const doc = new Y.Doc();
-  doc.getText("codemirror");
+  ensureFsDefaults(doc);
   roomDocs.set(roomId, doc);
 
-  // ---- READY PROMISE (load latest snapshot once) ----
+  // ---- READY PROMISE (load latest full-doc snapshot once) ----
   const readyPromise = (async () => {
     if (!snapshotRepo) return;
 
@@ -95,21 +142,21 @@ function ensureRoomCreated(roomId) {
       const snapshot = await snapshotRepo.getSnapshot(roomId);
       if (snapshot) {
         Y.applyUpdate(doc, new Uint8Array(snapshot), "remote");
-        console.log(`📥 Loaded snapshot for room: ${roomId}`);
-      } else {
-        console.log(`ℹ️ No snapshot found for room: ${roomId}`);
       }
+      // ensure FS still valid after loading old snapshot
+      ensureFsDefaults(doc);
     } catch (e) {
       console.warn(`⚠️ Failed to load snapshot for room ${roomId}:`, e);
+      ensureFsDefaults(doc);
     }
   })();
 
   roomReady.set(roomId, readyPromise);
 
-  // Start periodic auto versioning
+  // Start periodic per-file auto versions
   startVersionTimer(roomId, doc);
 
-  // ---- Debounced saver (latest snapshot only) ----
+  // ---- Debounced saver (latest full snapshot only) ----
   doc.on("update", () => {
     if (!snapshotRepo) return;
 
@@ -121,7 +168,6 @@ function ensureRoomCreated(roomId) {
         try {
           const update = Y.encodeStateAsUpdate(doc);
           await snapshotRepo.saveSnapshot(roomId, Buffer.from(update));
-          console.log(`💾 Saved snapshot for room: ${roomId}`);
         } catch (e) {
           console.warn(`⚠️ Failed to save snapshot for room ${roomId}:`, e);
         } finally {
@@ -139,7 +185,6 @@ function getRoomDoc(roomId) {
   return roomDocs.get(roomId);
 }
 
-// ✅ wait until snapshot load finishes
 async function waitRoomReady(roomId) {
   ensureRoomCreated(roomId);
   const p = roomReady.get(roomId);
@@ -156,7 +201,6 @@ function deleteRoom(roomId) {
   saveTimers.delete(roomId);
 
   stopVersionTimer(roomId);
-
   roomReady.delete(roomId);
 
   const doc = roomDocs.get(roomId);
@@ -181,12 +225,105 @@ function scheduleRoomCleanup(roomId, delayMs = 10 * 60 * 1000) {
   cleanupTimers.set(roomId, t);
 }
 
+/* ---------------------------
+   FS helpers for handlers
+   --------------------------- */
+function createFolder(doc, { parentId = "root", name = "folder" }) {
+  const nodes = doc.getMap("fs:nodes");
+
+  const id = `node:${crypto.randomUUID()}`;
+  const n = new Y.Map();
+  n.set("id", id);
+  n.set("type", "folder");
+  n.set("name", name);
+  n.set("parentId", parentId);
+  n.set("createdAt", Date.now());
+  nodes.set(id, n);
+
+  return id;
+}
+
+function createFile(doc, { parentId = "root", name = "file.js", initialContent = "" }) {
+  const nodes = doc.getMap("fs:nodes");
+  const files = doc.getMap("files");
+
+  const fileId = crypto.randomUUID();
+  const text = new Y.Text();
+  if (initialContent) text.insert(0, initialContent);
+  files.set(fileId, text);
+
+  const nodeId = `node:${crypto.randomUUID()}`;
+  const n = new Y.Map();
+  n.set("id", nodeId);
+  n.set("type", "file");
+  n.set("name", name);
+  n.set("parentId", parentId);
+  n.set("fileId", fileId);
+  n.set("createdAt", Date.now());
+  nodes.set(nodeId, n);
+
+  return { nodeId, fileId };
+}
+
+function renameNode(doc, { nodeId, name }) {
+  const nodes = doc.getMap("fs:nodes");
+  const n = nodes.get(nodeId);
+  if (!n) return false;
+  n.set("name", name);
+  return true;
+}
+
+function moveNode(doc, { nodeId, parentId }) {
+  const nodes = doc.getMap("fs:nodes");
+  const n = nodes.get(nodeId);
+  if (!n) return false;
+  n.set("parentId", parentId);
+  return true;
+}
+
+function deleteNodeRecursive(doc, nodeId) {
+  const nodes = doc.getMap("fs:nodes");
+  const files = doc.getMap("files");
+
+  const target = nodes.get(nodeId);
+  if (!target) return;
+
+  const type = target.get("type");
+
+  // delete children first if folder
+  if (type === "folder") {
+    for (const [id, node] of nodes.entries()) {
+      if (node?.get("parentId") === nodeId) {
+        deleteNodeRecursive(doc, id);
+      }
+    }
+  }
+
+  // delete file content
+  if (type === "file") {
+    const fileId = target.get("fileId");
+    if (fileId && files.has(fileId)) files.delete(fileId);
+  }
+
+  nodes.delete(nodeId);
+}
+
 module.exports = {
   getRoomDoc,
   waitRoomReady,
   deleteRoom,
   scheduleRoomCleanup,
   cancelRoomCleanup,
+
   setSnapshotRepo,
   getSnapshotRepo,
+
+  // FS helpers
+  ensureFsDefaults,
+  getAllFileIds,
+  createFolder,
+  createFile,
+  renameNode,
+  moveNode,
+  deleteNodeRecursive,
 };
