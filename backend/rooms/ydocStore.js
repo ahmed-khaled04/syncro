@@ -5,7 +5,6 @@ const roomReady = new Map();         // roomId -> Promise<void>
 const cleanupTimers = new Map();     // roomId -> Timeout
 const saveTimers = new Map();        // roomId -> Timeout
 
-// NEW: versioning timers + last saved content
 const versionTimers = new Map();       // roomId -> Timeout
 const lastVersionContent = new Map();  // roomId -> string
 
@@ -25,6 +24,11 @@ function getDebounceMs() {
 function getIntervalMs() {
   const v = Number(process.env.SNAPSHOT_INTERVAL_MS);
   return Number.isFinite(v) ? v : 5 * 60 * 1000; // 5 min
+}
+
+function getMaxAutoVersions() {
+  const v = Number(process.env.SNAPSHOT_MAX_AUTO);
+  return Number.isFinite(v) ? v : 200;
 }
 
 function startVersionTimer(roomId, doc) {
@@ -49,6 +53,12 @@ function startVersionTimer(roomId, doc) {
           snapshotBuffer: Buffer.from(update),
           content,
         });
+
+        // ✅ NEW: keep only the most recent N auto snapshots
+        // (milestones are untouched)
+        if (typeof snapshotRepo.pruneAutoVersions === "function") {
+          await snapshotRepo.pruneAutoVersions(roomId, getMaxAutoVersions());
+        }
 
         lastVersionContent.set(roomId, content);
         console.log(`🕒 Auto version snapshot saved: ${roomId}`);

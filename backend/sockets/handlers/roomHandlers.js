@@ -225,21 +225,46 @@ function registerRoomHandlers(io, socket) {
       const doc = getRoomDoc(roomId);
       const ytext = doc.getText("codemirror");
 
-      // Replace whole text (best for "restore")
+      // 1) Capture current state (to be overwritten)
+      const currentContent = ytext.toString();
+      const currentUpdate = Y.encodeStateAsUpdate(doc);
+
+      // 2) Save safety snapshot (milestone)
+      const stamp = new Date().toLocaleString();
+      const safety = await repo.createVersion({
+        roomId,
+        kind: "milestone",
+        label: `Before restore — ${stamp}`,
+        createdBy: socket.data.userId || null,
+        snapshotBuffer: Buffer.from(currentUpdate),
+        content: currentContent,
+      });
+
+      // 3) Apply restore
       doc.transact(() => {
         ytext.delete(0, ytext.length);
-        ytext.insert(0, row.content);
+        ytext.insert(0, row.content || "");
       }, "restore");
 
-      // Broadcast full sync so everyone converges quickly
+      // 4) Broadcast full sync
       const full = Y.encodeStateAsUpdate(doc);
       io.to(roomId).emit("y-sync", { update: Array.from(full) });
+
+      // ✅ 5) Tell clients what happened (UI feedback)
+      io.to(roomId).emit("snapshot:restore:done", {
+        roomId,
+        restoredId: row.id,
+        safetyId: safety?.id || null,
+        at: Date.now(),
+        by: socket.data.userId || null,
+      });
 
       io.to(roomId).emit("system", `⏪ Snapshot restored by owner.`);
     } catch (e) {
       console.warn("snapshot:restore failed:", e);
     }
   });
+
 
   socket.on("disconnecting", () => {
     for (const rid of socket.rooms) {

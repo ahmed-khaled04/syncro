@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Virtuoso } from "react-virtuoso";
 import { diffLines } from "diff";
 
 /* ---------------- helpers ---------------- */
@@ -61,16 +62,44 @@ function cellClasses(type) {
   return "bg-transparent text-zinc-200";
 }
 
-/* ---------------- UI building blocks ---------------- */
-
-function Backdrop({ onClick }) {
-  return <div className="fixed inset-0 bg-black/70" onClick={onClick} />;
+function labelOf(it) {
+  if (!it) return "";
+  if (it.kind === "current") return "🟣 Current";
+  const icon = it.kind === "milestone" ? "📌" : "🕒";
+  return `${icon} ${it.label || (it.kind === "milestone" ? "Milestone" : "Auto")}`;
 }
+
+function safeLower(s) {
+  return String(s || "").toLowerCase();
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text ?? "");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text ?? ""], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------------- UI building blocks ---------------- */
 
 function ModalShell({ children, className = "" }) {
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <Backdrop onClick={() => {}} />
+      <div className="fixed inset-0 bg-black/70" />
       <div
         className={
           "relative w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden " +
@@ -146,60 +175,82 @@ function TextInput({ value, onChange, placeholder }) {
   );
 }
 
-/* ---------------- Side-by-side diff ---------------- */
+function Chip({ active, children, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded-lg border px-3 py-2 text-xs font-semibold transition " +
+        (active
+          ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-100"
+          : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/40")
+      }
+    >
+      {children}
+    </button>
+  );
+}
 
-function SideBySideDiff({ beforeText, afterText }) {
+/* ---------------- Side-by-side diff (virtualized) ---------------- */
+
+function SideBySideDiff({ beforeText, afterText, leftTitle = "LEFT", rightTitle = "RIGHT" }) {
   const rows = useMemo(
     () => buildSideBySideRows(beforeText || "", afterText || ""),
     [beforeText, afterText]
   );
 
   return (
-    <div className="rounded-2xl border border-zinc-800 overflow-hidden">
+    <div className="rounded-2xl border border-zinc-800 overflow-hidden h-full flex flex-col">
       <div className="grid grid-cols-2 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur sticky top-0 z-10">
         <div className="px-4 py-3 text-xs font-semibold text-zinc-400 border-r border-zinc-800">
-          BEFORE (snapshot)
+          {leftTitle}
         </div>
         <div className="px-4 py-3 text-xs font-semibold text-zinc-400">
-          AFTER (current editor)
+          {rightTitle}
         </div>
       </div>
 
-      <div className="divide-y divide-zinc-900/60">
-        {rows.length === 0 ? (
-          <div className="p-6 text-sm text-zinc-400">No diff to show.</div>
-        ) : (
-          rows.map((r, idx) => (
-            <div key={idx} className="grid grid-cols-2">
-              <div className="flex border-r border-zinc-800">
-                <div className="w-14 shrink-0 select-none text-right pr-3 py-1.5 text-[11px] text-zinc-500 bg-zinc-950/60 border-r border-zinc-800">
-                  {r.left.no}
+      {rows.length === 0 ? (
+        <div className="p-6 text-sm text-zinc-400">No diff to show.</div>
+      ) : (
+        <div className="flex-1 min-h-0">
+          <Virtuoso
+            className="sync-scroll"
+            style={{ height: "100%" }}
+            data={rows}
+            itemContent={(index, r) => (
+              <div className="grid grid-cols-2 border-b border-zinc-900/60">
+                <div className="flex border-r border-zinc-800">
+                  <div className="w-14 shrink-0 select-none text-right pr-3 py-1.5 text-[11px] text-zinc-500 bg-zinc-950/60 border-r border-zinc-800">
+                    {r.left.no}
+                  </div>
+                  <pre
+                    className={`flex-1 py-1.5 px-3 text-xs font-mono whitespace-pre-wrap break-words ${cellClasses(
+                      r.left.type
+                    )}`}
+                  >
+                    {r.left.text}
+                  </pre>
                 </div>
-                <pre
-                  className={`flex-1 py-1.5 px-3 text-xs font-mono whitespace-pre-wrap break-words ${cellClasses(
-                    r.left.type
-                  )}`}
-                >
-                  {r.left.text}
-                </pre>
-              </div>
 
-              <div className="flex">
-                <div className="w-14 shrink-0 select-none text-right pr-3 py-1.5 text-[11px] text-zinc-500 bg-zinc-950/60 border-r border-zinc-800">
-                  {r.right.no}
+                <div className="flex">
+                  <div className="w-14 shrink-0 select-none text-right pr-3 py-1.5 text-[11px] text-zinc-500 bg-zinc-950/60 border-r border-zinc-800">
+                    {r.right.no}
+                  </div>
+                  <pre
+                    className={`flex-1 py-1.5 px-3 text-xs font-mono whitespace-pre-wrap break-words ${cellClasses(
+                      r.right.type
+                    )}`}
+                  >
+                    {r.right.text}
+                  </pre>
                 </div>
-                <pre
-                  className={`flex-1 py-1.5 px-3 text-xs font-mono whitespace-pre-wrap break-words ${cellClasses(
-                    r.right.type
-                  )}`}
-                >
-                  {r.right.text}
-                </pre>
               </div>
-            </div>
-          ))
-        )}
-      </div>
+            )}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -211,13 +262,29 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // Diff modes:
+  // - "single": snapshot vs current editor
+  // - "compare": snapshot A vs snapshot B
+  // - "compareCurrent": snapshot A vs current
   const [diffOpen, setDiffOpen] = useState(false);
+  const [diffMode, setDiffMode] = useState("single"); // "single" | "compare" | "compareCurrent"
+
   const [selected, setSelected] = useState(null);
   const [working, setWorking] = useState(false);
 
   const [currentContent, setCurrentContent] = useState("");
 
-  // Modern dialogs (replace window.prompt / window.confirm)
+  // Compare selection
+  const [compareAId, setCompareAId] = useState(null);
+  const [compareBId, setCompareBId] = useState(null);
+  const [compareA, setCompareA] = useState(null);
+  const [compareB, setCompareB] = useState(null);
+
+  const pendingSingleIdRef = useRef(null);
+  const pendingCompareRef = useRef({ a: null, b: null });
+  const cacheRef = useRef(new Map());
+
+  // dialogs
   const [milestoneOpen, setMilestoneOpen] = useState(false);
   const [milestoneLabel, setMilestoneLabel] = useState("Milestone");
   const [milestoneSaving, setMilestoneSaving] = useState(false);
@@ -225,6 +292,19 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreTargetId, setRestoreTargetId] = useState(null);
   const [restoreWorking, setRestoreWorking] = useState(false);
+
+  // ✅ Toast
+  const [toast, setToast] = useState(null); // { title, body }
+  const toastTimerRef = useRef(null);
+  const showToast = (t) => {
+    setToast(t);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4200);
+  };
+
+  // ✅ Search + Filter state
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState("all"); // all | milestone | auto
 
   // Keep currentContent synced with Yjs
   useEffect(() => {
@@ -254,7 +334,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
   const refresh = () => {
     if (!socket || !roomId) return;
     setLoading(true);
-    socket.emit("snapshots:list", { roomId, limit: 50 });
+    socket.emit("snapshots:list", { roomId, limit: 150 });
   };
 
   useEffect(() => {
@@ -269,19 +349,60 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
     const onGet = ({ roomId: rid, snapshot }) => {
       if (rid !== roomId) return;
       if (!snapshot) return;
-      setSelected(snapshot);
-      setDiffOpen(true);
-      setWorking(false);
+
+      cacheRef.current.set(snapshot.id, snapshot);
+
+      if (pendingSingleIdRef.current && pendingSingleIdRef.current === snapshot.id) {
+        pendingSingleIdRef.current = null;
+        setSelected(snapshot);
+        setDiffMode("single");
+        setDiffOpen(true);
+        setWorking(false);
+        return;
+      }
+
+      const pend = pendingCompareRef.current;
+      if (pend.a && pend.a === snapshot.id) {
+        pend.a = null;
+        setCompareA(snapshot);
+      }
+      if (pend.b && pend.b === snapshot.id) {
+        pend.b = null;
+        setCompareB(snapshot);
+      }
+      pendingCompareRef.current = pend;
+
+      const aReady = compareAId ? cacheRef.current.get(compareAId) : null;
+      const bReady = compareBId ? cacheRef.current.get(compareBId) : null;
+      if (aReady && bReady) {
+        setCompareA(aReady);
+        setCompareB(bReady);
+        setDiffMode("compare");
+        setDiffOpen(true);
+      }
+    };
+
+    const onRestoreDone = ({ roomId: rid, restoredId, safetyId }) => {
+      if (rid !== roomId) return;
+      showToast({
+        title: "Snapshot restored",
+        body: safetyId
+          ? `Backup created (#${safetyId}) • Restored (#${restoredId})`
+          : `Restored (#${restoredId})`,
+      });
+      setTimeout(refresh, 250);
     };
 
     socket.on("snapshots:list:result", onList);
     socket.on("snapshot:get:result", onGet);
+    socket.on("snapshot:restore:done", onRestoreDone);
 
     return () => {
       socket.off("snapshots:list:result", onList);
       socket.off("snapshot:get:result", onGet);
+      socket.off("snapshot:restore:done", onRestoreDone);
     };
-  }, [socket, roomId]);
+  }, [socket, roomId, compareAId, compareBId]);
 
   useEffect(() => {
     if (!open) return;
@@ -289,10 +410,91 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const fetchSnapshot = (id) => {
+    if (!socket || !roomId) return;
+    socket.emit("snapshot:get", { roomId, id });
+  };
+
   const viewDiff = (id) => {
     if (!socket || !roomId) return;
+
+    const cached = cacheRef.current.get(id);
     setWorking(true);
-    socket.emit("snapshot:get", { roomId, id });
+    setDiffMode("single");
+
+    if (cached?.content != null) {
+      pendingSingleIdRef.current = null;
+      setSelected(cached);
+      setDiffOpen(true);
+      setWorking(false);
+      return;
+    }
+
+    pendingSingleIdRef.current = id;
+    fetchSnapshot(id);
+  };
+
+  const clearCompare = () => {
+    setCompareAId(null);
+    setCompareBId(null);
+    setCompareA(null);
+    setCompareB(null);
+    pendingCompareRef.current = { a: null, b: null };
+  };
+
+  const pickCompare = (id) => {
+    if (!socket || !roomId) return;
+
+    if (!compareAId) {
+      setCompareAId(id);
+      const cached = cacheRef.current.get(id);
+      if (cached?.content != null) {
+        setCompareA(cached);
+      } else {
+        pendingCompareRef.current = { ...pendingCompareRef.current, a: id };
+        fetchSnapshot(id);
+      }
+      return;
+    }
+
+    if (compareAId === id) {
+      clearCompare();
+      return;
+    }
+
+    setCompareBId(id);
+    const cachedB = cacheRef.current.get(id);
+    if (cachedB?.content != null) {
+      setCompareB(cachedB);
+      const a = cacheRef.current.get(compareAId);
+      if (a?.content != null) {
+        setCompareA(a);
+        setDiffMode("compare");
+        setDiffOpen(true);
+      }
+    } else {
+      pendingCompareRef.current = { ...pendingCompareRef.current, b: id };
+      fetchSnapshot(id);
+    }
+  };
+
+  const compareWithCurrent = () => {
+    if (!compareAId) return;
+    const a = cacheRef.current.get(compareAId) || compareA;
+    if (!a?.content) return;
+
+    const current = {
+      id: "current",
+      kind: "current",
+      label: "Current",
+      created_at: Date.now(),
+      content: currentContent || "",
+    };
+
+    setCompareA(a);
+    setCompareB(current);
+    setDiffMode("compareCurrent");
+    setDiffOpen(true);
   };
 
   const openRestoreDialog = (id) => {
@@ -307,7 +509,6 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
 
     socket.emit("snapshot:restore", { roomId, id: restoreTargetId });
 
-    // close dialogs
     setRestoreOpen(false);
     setRestoreTargetId(null);
     setDiffOpen(false);
@@ -337,8 +538,115 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
     }, 250);
   };
 
+  // ✅ Apply search + filter
+  const filteredItems = useMemo(() => {
+    const q = safeLower(query).trim();
+
+    return (items || []).filter((it) => {
+      if (!it) return false;
+
+      if (kindFilter !== "all") {
+        if (kindFilter === "milestone" && it.kind !== "milestone") return false;
+        if (kindFilter === "auto" && it.kind !== "auto") return false;
+      }
+
+      if (!q) return true;
+
+      const hay = [
+        it.id,
+        it.kind,
+        it.label,
+        it.created_by,
+        formatTime(it.created_at),
+      ]
+        .map((x) => safeLower(x))
+        .join(" ");
+
+      return hay.includes(q);
+    });
+  }, [items, query, kindFilter]);
+
+  // Diff selection
+  const diffLeft =
+    diffMode === "single" ? (selected?.content || "") : (compareA?.content || "");
+  const diffRight =
+    diffMode === "single" ? (currentContent || "") : (compareB?.content || "");
+
+  const leftTitle =
+    diffMode === "single"
+      ? `BEFORE (${labelOf(selected)})`
+      : `A (${labelOf(compareA)})`;
+
+  const rightTitle =
+    diffMode === "compareCurrent"
+      ? `CURRENT`
+      : `B (${labelOf(compareB)})`;
+
+  const diffTitle =
+    diffMode === "single"
+      ? selected
+        ? `${labelOf(selected)} → Current`
+        : "Snapshot"
+      : diffMode === "compareCurrent"
+        ? compareA
+          ? `Compare: ${labelOf(compareA)} ↔ Current`
+          : "Compare"
+        : compareA && compareB
+          ? `Compare: ${labelOf(compareA)} ↔ ${labelOf(compareB)}`
+          : "Compare";
+
+  // ✅ Export helpers for diff
+  const exportLeft = () => {
+    const name = diffMode === "single"
+      ? `snapshot-${selected?.id || "unknown"}`
+      : `A-${compareA?.id || "unknown"}`;
+    downloadTextFile(`${name}.txt`, diffLeft);
+    showToast({ title: "Downloaded", body: `${name}.txt` });
+  };
+
+  const exportRight = () => {
+    const name =
+      diffMode === "single"
+        ? `current`
+        : diffMode === "compareCurrent"
+          ? `current`
+          : `B-${compareB?.id || "unknown"}`;
+    downloadTextFile(`${name}.txt`, diffRight);
+    showToast({ title: "Downloaded", body: `${name}.txt` });
+  };
+
+  const copyLeft = async () => {
+    const ok = await copyToClipboard(diffLeft);
+    showToast({ title: ok ? "Copied" : "Copy failed", body: ok ? "LEFT copied to clipboard" : "Browser blocked clipboard" });
+  };
+
+  const copyRight = async () => {
+    const ok = await copyToClipboard(diffRight);
+    showToast({ title: ok ? "Copied" : "Copy failed", body: ok ? "RIGHT copied to clipboard" : "Browser blocked clipboard" });
+  };
+
   return (
     <>
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-4 right-4 z-[120] w-[340px]">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/90 backdrop-blur shadow-2xl p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-zinc-100">{toast.title}</div>
+                <div className="mt-1 text-xs text-zinc-400">{toast.body}</div>
+              </div>
+              <button
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800/40"
+                onClick={() => setToast(null)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Buttons */}
       <div className="flex items-center gap-2">
         <button
@@ -373,7 +681,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
 
-          <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-zinc-950 border-l border-zinc-800 shadow-2xl">
+          <div className="absolute right-0 top-0 h-full w-full sm:w-[580px] bg-zinc-950 border-l border-zinc-800 shadow-2xl">
             <div className="flex items-center justify-between p-4 border-b border-zinc-800">
               <div>
                 <div className="text-sm font-semibold">Version history</div>
@@ -398,34 +706,93 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
               </div>
             </div>
 
-            <div className="p-4 space-y-3 overflow-auto h-[calc(100%-64px)]">
+            <div className="p-4 space-y-3 overflow-auto h-[calc(100%-64px)] sync-scroll">
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
                 <div className="text-xs text-zinc-400">
-                  Restore is owner-only (available inside Diff view).
+                  Restore is owner-only. Compare: pick A then B (or A → Current).
                 </div>
                 <div className="mt-1 text-xs text-zinc-500">
                   Owner: <span className="font-mono text-zinc-300">{ownerId || "unknown"}</span>
                 </div>
               </div>
 
-              {items.length === 0 && !loading && (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-400">
-                  No snapshots yet.
-                  <div className="mt-1 text-xs text-zinc-500">
-                    Auto snapshots are created every few minutes when content changes.
+              {/* ✅ Search + Filter */}
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/25 p-3 space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <TextInput
+                      value={query}
+                      onChange={setQuery}
+                      placeholder="Search… (label, kind, id, date)"
+                    />
                   </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="text-xs font-semibold text-zinc-400 mr-1">Filter:</div>
+                  <Chip active={kindFilter === "all"} onClick={() => setKindFilter("all")}>
+                    All
+                  </Chip>
+                  <Chip active={kindFilter === "milestone"} onClick={() => setKindFilter("milestone")}>
+                    Milestones
+                  </Chip>
+                  <Chip active={kindFilter === "auto"} onClick={() => setKindFilter("auto")}>
+                    Auto
+                  </Chip>
+
+                  <div className="ml-auto text-[11px] text-zinc-500">
+                    Showing <span className="text-zinc-200">{filteredItems.length}</span>{" "}
+                    / {items.length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Compare selection */}
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/25 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-zinc-300">Compare selection</div>
+                    <div className="mt-1 text-[11px] text-zinc-500">
+                      A: <span className="text-zinc-200">{compareAId ? `#${compareAId}` : "—"}</span>{" "}
+                      • B: <span className="text-zinc-200">{compareBId ? `#${compareBId}` : "—"}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={compareWithCurrent}
+                      className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition disabled:opacity-50"
+                      disabled={!compareAId}
+                      title="Compare A with current editor content"
+                    >
+                      Compare w/ Current
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={clearCompare}
+                      className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800/40 transition disabled:opacity-50"
+                      disabled={!compareAId && !compareBId}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {filteredItems.length === 0 && !loading && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-400">
+                  No snapshots match your search.
                 </div>
               )}
 
               <div className="space-y-2">
-                {items.map((it) => (
+                {filteredItems.map((it) => (
                   <div key={it.id} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold truncate">
-                          {it.kind === "milestone" ? "📌" : "🕒"}{" "}
-                          {it.label || (it.kind === "milestone" ? "Milestone" : "Auto")}
-                        </div>
+                        <div className="text-sm font-semibold truncate">{labelOf(it)}</div>
                         <div className="mt-1 text-xs text-zinc-500">{formatTime(it.created_at)}</div>
                       </div>
 
@@ -436,6 +803,29 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                           className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition"
                         >
                           {working ? "…" : "Diff"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => pickCompare(it.id)}
+                          className={
+                            "rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition " +
+                            (compareAId === it.id
+                              ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-100"
+                              : compareBId === it.id
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+                                : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/40")
+                          }
+                        >
+                          {!compareAId
+                            ? "Compare (A)"
+                            : compareAId === it.id
+                              ? "A ✓"
+                              : !compareBId
+                                ? "Compare (B)"
+                                : compareBId === it.id
+                                  ? "B ✓"
+                                  : "Compare"}
                         </button>
                       </div>
                     </div>
@@ -460,48 +850,95 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
         </div>
       )}
 
-      {/* Fullscreen Diff modal (side-by-side + line numbers + restore) */}
-      {diffOpen && selected && (
+      {/* Fullscreen Diff modal */}
+      {diffOpen && (
         <div className="fixed inset-0 z-[60] flex flex-col bg-zinc-950">
-          {/* Header */}
-          <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur">
             <div className="min-w-0">
-              <div className="text-sm font-semibold truncate">
-                {selected.kind === "milestone" ? "📌" : "🕒"} {selected.label || "Snapshot"}
-              </div>
-              <div className="mt-1 text-xs text-zinc-500">{formatTime(selected.created_at)}</div>
+              <div className="text-sm font-semibold truncate">{diffTitle}</div>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-2 text-[11px]">
-                <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/30 px-2 py-1 text-zinc-300">
-                  <span className="inline-block h-2 w-2 rounded-sm bg-emerald-400/70" /> added
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/30 px-2 py-1 text-zinc-300">
-                  <span className="inline-block h-2 w-2 rounded-sm bg-rose-400/70" /> removed
-                </span>
-              </div>
+            {/* ✅ Export actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={copyLeft}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800/40 transition"
+                title="Copy LEFT"
+              >
+                Copy Left
+              </button>
+              <button
+                type="button"
+                onClick={copyRight}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800/40 transition"
+                title="Copy RIGHT"
+              >
+                Copy Right
+              </button>
+              <button
+                type="button"
+                onClick={exportLeft}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition"
+                title="Download LEFT .txt"
+              >
+                Download Left
+              </button>
+              <button
+                type="button"
+                onClick={exportRight}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-indigo-500/10 hover:border-indigo-500/30 hover:text-indigo-100 transition"
+                title="Download RIGHT .txt"
+              >
+                Download Right
+              </button>
 
-              {youAreOwner && (
-                <DangerButton onClick={() => openRestoreDialog(selected.id)} title="Restore this snapshot">
+              {youAreOwner && diffMode === "single" && selected && (
+                <DangerButton onClick={() => openRestoreDialog(selected.id)} className="px-3 py-2 text-xs">
                   ⏪ Restore
                 </DangerButton>
               )}
 
-              <SecondaryButton onClick={() => setDiffOpen(false)}>Close</SecondaryButton>
+              {youAreOwner && (diffMode === "compare" || diffMode === "compareCurrent") && compareA && (
+                <DangerButton
+                  onClick={() => openRestoreDialog(compareA.id)}
+                  className="px-3 py-2 text-xs"
+                  title="Restore snapshot A"
+                >
+                  ⏪ Restore A
+                </DangerButton>
+              )}
+
+              {youAreOwner && diffMode === "compare" && compareB && compareB.id !== "current" && (
+                <DangerButton
+                  onClick={() => openRestoreDialog(compareB.id)}
+                  className="px-3 py-2 text-xs"
+                  title="Restore snapshot B"
+                >
+                  ⏪ Restore B
+                </DangerButton>
+              )}
+
+              <SecondaryButton onClick={() => setDiffOpen(false)} className="px-3 py-2 text-xs">
+                Close
+              </SecondaryButton>
             </div>
           </div>
 
-          {/* Body (scrollable) */}
-          <div className="flex-1 overflow-auto p-6">
-            <div className="mx-auto w-full max-w-[1400px]">
-              <SideBySideDiff beforeText={selected.content || ""} afterText={currentContent || ""} />
+          <div className="flex-1 overflow-hidden p-6">
+            <div className="mx-auto w-full max-w-[1400px] h-full">
+              <SideBySideDiff
+                beforeText={diffLeft}
+                afterText={diffRight}
+                leftTitle={leftTitle}
+                rightTitle={rightTitle}
+              />
             </div>
           </div>
         </div>
       )}
 
-      {/* Modern Restore Confirm dialog */}
+      {/* Restore Confirm */}
       {restoreOpen && (
         <ModalShell className="max-w-md">
           <div className="p-5 border-b border-zinc-800 bg-zinc-950">
@@ -542,7 +979,7 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
         </ModalShell>
       )}
 
-      {/* Modern Milestone dialog */}
+      {/* Milestone dialog */}
       {milestoneOpen && (
         <ModalShell className="max-w-md">
           <div className="p-5 border-b border-zinc-800 bg-zinc-950">
@@ -565,9 +1002,6 @@ export default function SnapshotPanel({ socket, roomId, ytext, youAreOwner, owne
                 onChange={setMilestoneLabel}
                 placeholder="e.g. Before refactor / v1 / lecture notes"
               />
-              <div className="text-[11px] text-zinc-500">
-                Tip: keep it short. You can always create more milestones.
-              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2">
