@@ -16,15 +16,15 @@ const { setSnapshotRepo } = require("./rooms/ydocStore");
 const { initRoomStore } = require("./rooms/roomStore");
 
 async function main() {
-  const app = createApp();
+  // init postgres
+  const pool = createPool();
+  await initDb(pool);
+
+  const app = createApp(pool);
   const server = http.createServer(app);
 
   const io = new Server(server, { cors: corsOptions() });
   registerSocketServer(io);
-
-  // init postgres
-  const pool = createPool();
-  await initDb(pool);
 
   //allow roomStore to persist room settings
   initRoomStore(pool);
