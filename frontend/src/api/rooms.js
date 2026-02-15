@@ -58,16 +58,27 @@ export const roomsAPI = {
 
   async deleteRoom(roomId) {
     const token = this.getToken();
-    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}`, {
+    const url = `${API_BASE_URL}/rooms/${roomId}`;
+    
+    console.log(`🗑️ Deleting room: ${roomId}`);
+    console.log(`📍 DELETE URL: ${url}`);
+    console.log(`🔐 Token present: ${!!token}`);
+    
+    const response = await fetch(url, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
 
+    console.log(`📊 Response status: ${response.status}`);
+
     if (!response.ok) {
       const error = await response.json();
+      console.error(`❌ Delete failed:`, error);
       throw new Error(error.error || "Failed to delete room");
     }
 
-    return await response.json();
+    const data = await response.json();
+    console.log(`✅ Room deleted:`, data);
+    return data;
   },
 };

@@ -14,9 +14,10 @@ export const authAPI = {
     }
 
     const data = await response.json();
-    // Save token to localStorage
+    // Save token and user ID to localStorage
     localStorage.setItem("syncro-token", data.token);
     localStorage.setItem("syncro-user", JSON.stringify(data.user));
+    localStorage.setItem("syncro-user-id", String(data.user.id)); // Store real user ID
     return data.user;
   },
 
@@ -33,9 +34,10 @@ export const authAPI = {
     }
 
     const data = await response.json();
-    // Save token to localStorage
+    // Save token and user ID to localStorage
     localStorage.setItem("syncro-token", data.token);
     localStorage.setItem("syncro-user", JSON.stringify(data.user));
+    localStorage.setItem("syncro-user-id", String(data.user.id)); // Store real user ID
     return data.user;
   },
 
@@ -52,10 +54,13 @@ export const authAPI = {
         // Token is invalid, clear it
         localStorage.removeItem("syncro-token");
         localStorage.removeItem("syncro-user");
+        localStorage.removeItem("syncro-user-id");
         return null;
       }
 
       const data = await response.json();
+      // Store user ID for socket communication
+      localStorage.setItem("syncro-user-id", String(data.user.id));
       return data.user;
     } catch (error) {
       console.error("Failed to get current user:", error);
@@ -66,6 +71,7 @@ export const authAPI = {
   logout() {
     localStorage.removeItem("syncro-token");
     localStorage.removeItem("syncro-user");
+    localStorage.removeItem("syncro-user-id");
   },
 
   getToken() {

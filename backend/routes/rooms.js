@@ -24,6 +24,8 @@ function createRoomRoutes(pool) {
   // Get user's rooms (owned and visited)
   router.get("/my-rooms", verifyToken, async (req, res) => {
     try {
+      console.log(`Fetching rooms for user_id: ${req.user.id}`);
+      
       const result = await pool.query(
         `SELECT 
           ur.room_id, 
@@ -31,19 +33,21 @@ function createRoomRoutes(pool) {
           ur.created_at as joined_at,
           ur.last_visited_at,
           rs.lang,
+          rs.owner_id,
           u.name as owner_name
         FROM user_rooms ur
         LEFT JOIN room_settings rs ON ur.room_id = rs.room_id
-        LEFT JOIN users u ON rs.owner_id = u.id::TEXT
+        LEFT JOIN users u ON rs.owner_id::INTEGER = u.id
         WHERE ur.user_id = $1
         ORDER BY ur.last_visited_at DESC`,
         [req.user.id]
       );
 
+      console.log(`Found ${result.rows.length} rooms:`, result.rows);
       res.json({ rooms: result.rows });
     } catch (error) {
       console.error("Error fetching rooms:", error);
-      res.status(500).json({ error: "Failed to fetch rooms" });
+      res.status(500).json({ error: error.message || "Failed to fetch rooms" });
     }
   });
 
@@ -58,22 +62,26 @@ function createRoomRoutes(pool) {
 
       // Generate unique room ID
       const roomId = Math.random().toString(36).slice(2, 8);
+      console.log(`Creating room: ${roomId}, user_id: ${req.user.id}, owner_id: ${String(req.user.id)}`);
 
       // Create room_settings entry
       await pool.query(
         `INSERT INTO room_settings (room_id, lang, locked, owner_id)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT DO NOTHING`,
-        [roomId, "js", false, req.user.id]
+        ON CONFLICT (room_id) DO NOTHING`,
+        [roomId, "js", false, String(req.user.id)]
       );
 
       // Create user_rooms entry (owner)
-      await pool.query(
+      const insertResult = await pool.query(
         `INSERT INTO user_rooms (user_id, room_id, is_owner)
         VALUES ($1, $2, $3)
-        ON CONFLICT DO NOTHING`,
+        ON CONFLICT (user_id, room_id) DO NOTHING
+        RETURNING *`,
         [req.user.id, roomId, true]
       );
+
+      console.log(`Room ${roomId} created. user_rooms result:`, insertResult.rows);
 
       res.status(201).json({
         room: {
@@ -85,7 +93,7 @@ function createRoomRoutes(pool) {
       });
     } catch (error) {
       console.error("Error creating room:", error);
-      res.status(500).json({ error: "Failed to create room" });
+      res.status(500).json({ error: error.message || "Failed to create room" });
     }
   });
 
@@ -105,6 +113,18 @@ function createRoomRoutes(pool) {
 
       const roomLang = roomCheck.rows[0].lang;
 
+      // Check if user already has this room in their list
+      const existingEntry = await pool.query(
+        `SELECT is_owner FROM user_rooms WHERE user_id = $1 AND room_id = $2`,
+        [req.user.id, roomId]
+      );
+
+      let isOwner = false;
+      if (existingEntry.rows.length > 0) {
+        // Preserve existing is_owner status
+        isOwner = existingEntry.rows[0].is_owner;
+      }
+
       // Insert or update user_rooms
       const result = await pool.query(
         `INSERT INTO user_rooms (user_id, room_id, is_owner, last_visited_at)
@@ -112,13 +132,13 @@ function createRoomRoutes(pool) {
         ON CONFLICT (user_id, room_id) DO UPDATE
         SET last_visited_at = NOW()
         RETURNING *`,
-        [req.user.id, roomId, false]
+        [req.user.id, roomId, isOwner]
       );
 
       res.json({
         room: {
           room_id: roomId,
-          is_owner: false,
+          is_owner: result.rows[0].is_owner,
           joined_at: result.rows[0].created_at,
           lang: roomLang,
         },
@@ -144,7 +164,7 @@ function createRoomRoutes(pool) {
         return res.status(404).json({ error: "Room not found" });
       }
 
-      if (ownerCheck.rows[0].owner_id !== req.user.id) {
+      if (String(ownerCheck.rows[0].owner_id) !== String(req.user.id)) {
         return res.status(403).json({ error: "Only room owner can delete" });
       }
 

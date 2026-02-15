@@ -14,17 +14,21 @@ export default function Dashboard() {
   // Modals
   const [createRoomModalOpen, setCreateRoomModalOpen] = useState(false);
   const [joinRoomModalOpen, setJoinRoomModalOpen] = useState(false);
+  const [deleteRoomModalOpen, setDeleteRoomModalOpen] = useState(false);
   const [createRoomName, setCreateRoomName] = useState("");
   const [joinRoomId, setJoinRoomId] = useState("");
+  const [roomToDelete, setRoomToDelete] = useState(null);
 
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Load rooms
   useEffect(() => {
     const loadRooms = async () => {
       try {
         const userRooms = await roomsAPI.getMyRooms();
+        console.log("Loaded rooms:", userRooms);
         setRooms(userRooms);
       } catch (err) {
         setError(err.message);
@@ -35,6 +39,15 @@ export default function Dashboard() {
 
     loadRooms();
   }, []);
+
+  const reloadRooms = async () => {
+    try {
+      const userRooms = await roomsAPI.getMyRooms();
+      setRooms(userRooms);
+    } catch (err) {
+      console.error("Failed to reload rooms:", err);
+    }
+  };
 
   const handleCreateRoom = async (e) => {
     e.preventDefault();
@@ -48,7 +61,7 @@ export default function Dashboard() {
       }
 
       const newRoom = await roomsAPI.createRoom(createRoomName);
-      setRooms([newRoom, ...rooms]);
+      await reloadRooms();
       setCreateRoomName("");
       setCreateRoomModalOpen(false);
       setSuccessMessage(`Room "${createRoomName}" created! Redirecting...`);
@@ -75,9 +88,10 @@ export default function Dashboard() {
       }
 
       await roomsAPI.joinRoom(joinRoomId);
+      await reloadRooms();
       setJoinRoomId("");
       setJoinRoomModalOpen(false);
-      setSuccessMessage(`Joining room "${joinRoomId}"...`);
+      setSuccessMessage(`Joined room "${joinRoomId}"! Redirecting...`);
 
       setTimeout(() => {
         navigate(`/room/${joinRoomId}`);
@@ -89,16 +103,30 @@ export default function Dashboard() {
     }
   };
 
-  const handleDeleteRoom = async (roomId) => {
-    if (!confirm("Are you sure you want to delete this room?")) return;
+  const handleDeleteRoom = (roomId) => {
+    setRoomToDelete(roomId);
+    setDeleteRoomModalOpen(true);
+    setError("");
+  };
+
+  const confirmDeleteRoom = async () => {
+    if (!roomToDelete) return;
+
+    setError("");
+    setSuccessMessage("");
+    setDeleting(true);
 
     try {
-      await roomsAPI.deleteRoom(roomId);
-      setRooms(rooms.filter((r) => r.room_id !== roomId));
+      await roomsAPI.deleteRoom(roomToDelete);
+      await reloadRooms();
       setSuccessMessage("Room deleted successfully");
+      setDeleteRoomModalOpen(false);
+      setRoomToDelete(null);
       setTimeout(() => setSuccessMessage(""), 3000);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -107,8 +135,10 @@ export default function Dashboard() {
     navigate("/");
   };
 
-  const handleEnterRoom = (roomId) => {
-    navigate(`/room/${roomId}`);
+  const handleEnterRoom = (roomId, isOwner = false) => {
+    navigate(`/room/${roomId}`, {
+      state: { isOwner },
+    });
   };
 
   const ownedRooms = rooms.filter((r) => r.is_owner);
@@ -249,7 +279,7 @@ export default function Dashboard() {
 
                         <div className="flex gap-3">
                           <button
-                            onClick={() => handleEnterRoom(room.room_id)}
+                            onClick={() => handleEnterRoom(room.room_id, room.is_owner)}
                             className="flex-1 px-4 py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white font-medium transition-colors text-sm"
                           >
                             Enter
@@ -303,7 +333,7 @@ export default function Dashboard() {
                         </p>
 
                         <button
-                          onClick={() => handleEnterRoom(room.room_id)}
+                          onClick={() => handleEnterRoom(room.room_id, room.is_owner)}
                           className="w-full px-4 py-2 rounded-lg bg-cyan-600/80 hover:bg-cyan-600 text-white font-medium transition-colors text-sm"
                         >
                           Enter Room
@@ -441,6 +471,57 @@ export default function Dashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Room Modal */}
+      {deleteRoomModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md p-8 animate-slide-in">
+            <div className="flex items-start gap-4 mb-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-red-500/10 border border-red-500/30">
+                <span className="text-2xl">⚠️</span>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-zinc-100">Delete Room</h3>
+                <p className="text-sm text-zinc-400 mt-1">This action cannot be undone</p>
+              </div>
+            </div>
+
+            <p className="text-zinc-300 mb-6">
+              Are you sure you want to delete room <span className="font-mono text-red-400">#{roomToDelete}</span>? This will permanently remove all data associated with this room.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteRoomModalOpen(false);
+                  setRoomToDelete(null);
+                  setError("");
+                }}
+                className="flex-1 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteRoom}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete Room"
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

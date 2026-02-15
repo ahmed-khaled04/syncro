@@ -333,7 +333,7 @@ export default function SnapshotPanel({
       setLoading(false);
     };
 
-    const onGet = ({ roomId: rid, fileId: fid, snapshot }) => {
+    const onGet = ({ roomId: rid, fileId: fid, item: snapshot }) => {
       if (rid !== roomId) return;
       if (fid !== fileId) return;
       if (!snapshot) return;

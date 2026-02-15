@@ -200,7 +200,7 @@ export default function EditorHeader({
 
   hasEditAccess,
   allowedEditors = [],
-  userDirectory = {},   // ✅ NEW
+  userDirectory = {},  
 
   editRequests = [],
 

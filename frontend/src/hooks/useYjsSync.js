@@ -7,11 +7,18 @@ import {
 } from "y-protocols/awareness";
 
 function getUserId() {
+  // First, try to get the real user ID from authentication
   let id = localStorage.getItem("syncro-user-id");
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem("syncro-user-id", id);
+  
+  if (id) {
+    console.log(`📌 Using authenticated user ID: ${id}`);
+    return id;
   }
+  
+  // Fallback: generate a temporary UUID (for guests without auth)
+  id = crypto.randomUUID();
+  console.log(`⚠️ No authenticated user ID, generated temporary UUID: ${id}`);
+  localStorage.setItem("syncro-user-id", id);
   return id;
 }
 

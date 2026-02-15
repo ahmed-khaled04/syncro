@@ -20,6 +20,22 @@ export default function CommandPalette({
   const [searchMode, setSearchMode] = useState("quick"); // "quick" or "content"
   const inputRef = useRef(null);
 
+  // Debug: log files when prop changes
+  useEffect(() => {
+    console.log("🎯 CommandPalette: useEffect triggered");
+    console.log("   isOpen =", isOpen);
+    console.log("   files =", files);
+    console.log("   files?.length =", files?.length);
+    
+    if (isOpen) {
+      if (!files || files.length === 0) {
+        console.error("❌ CommandPalette OPENED but files is empty!");
+      } else {
+        console.log("✅ CommandPalette OPENED with files:", files.map(f => f.name).join(", "));
+      }
+    }
+  }, [isOpen, files]);
+
   // Search through file contents
   const searchFileContents = useCallback((query) => {
     if (!ydoc || !query.trim()) return [];
@@ -122,21 +138,60 @@ export default function CommandPalette({
 
     // File name search commands
     if (queryLower && searchMode === "quick") {
-      files.forEach((file) => {
-        if (
-          file.name.toLowerCase().includes(queryLower) &&
-          file.type === "file"
-        ) {
+      const matchedFiles = (files || [])
+        .filter((file) => {
+          if (!file || !file.name) return false;
+          if (file.type !== "file") return false;
+          const fileName = String(file.name).toLowerCase();
+          return fileName.includes(queryLower);
+        })
+        .sort((a, b) => {
+          // Sort by best match
+          const aIndex = String(a.name).toLowerCase().indexOf(queryLower);
+          const bIndex = String(b.name).toLowerCase().indexOf(queryLower);
+          if (aIndex !== bIndex) return aIndex - bIndex;
+          return a.name.length - b.name.length;
+        });
+
+      // Debug logging
+      if (queryLower && (!files || files.length === 0)) {
+        console.error("❌ Search query:", queryLower, "but files array is empty or undefined");
+      } else if (queryLower && matchedFiles.length === 0) {
+        console.warn("🔍 Search query:", queryLower, "matched 0 of", files?.length, "files");
+        console.log("📄 Available files:", files?.map(f => f.name));
+      } else if (queryLower && matchedFiles.length > 0) {
+        console.log("✅ Search query:", queryLower, "→ Found", matchedFiles.length, "files:", matchedFiles.map(f => f.name));
+      }
+
+      if (matchedFiles.length > 0) {
+        cmds.push({
+          id: "file-search-header",
+          label: `Files (${matchedFiles.length} match${matchedFiles.length !== 1 ? "es" : ""})`,
+          description: "Press Enter to open in new tab",
+          icon: "📁",
+          disabled: true,
+        });
+
+        matchedFiles.forEach((file) => {
           cmds.push({
             id: `file-${file.fileId}`,
             label: file.name,
-            description: "Open file",
+            description: "Open in new tab",
             icon: "📄",
             action: () => onSelectFile(file.fileId),
             highlight: queryLower,
           });
-        }
-      });
+        });
+      } else if (queryLower) {
+        // Show message when no files match
+        cmds.push({
+          id: "no-files",
+          label: "No files found",
+          description: `No files match "${search}"`,
+          icon: "📭",
+          disabled: true,
+        });
+      }
     }
     
     // Quick actions (when in quick mode or no search)

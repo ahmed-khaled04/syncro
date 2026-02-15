@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 /* ========== Modal Shell ========== */
 export function ModalShell({ children, className = "" }) {
-  return (
+  const modalContent = (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/70" />
       <div
@@ -15,6 +16,8 @@ export function ModalShell({ children, className = "" }) {
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }
 
 /* ========== Buttons ========== */

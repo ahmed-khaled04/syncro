@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
+import { createPortal } from "react-dom";
 import { useAuth } from "../hooks/useAuth";
 import { socket } from "../config/socket";
 import { useRoomLanguage } from "../hooks/useRoomLanguage";
@@ -21,6 +22,7 @@ export default function RoomPage() {
 
   // Use authenticated user's name, fallback to location state for backwards compatibility
   const name = user?.name || location.state?.name;
+  const isRoomOwner = location.state?.isOwner || false;
 
   // All hooks must be called before any conditional returns
   const { ydoc, awareness, synced, ready } = useYjsSync(socket, roomId, name);
@@ -30,7 +32,9 @@ export default function RoomPage() {
 
   const myUserId = useMemo(() => {
     try {
-      return localStorage.getItem("syncro-user-id");
+      const uid = localStorage.getItem("syncro-user-id");
+      console.log(`📌 myUserId from localStorage: "${uid}" (type: ${typeof uid})`);
+      return uid;
     } catch {
       return null;
     }
@@ -39,6 +43,7 @@ export default function RoomPage() {
   const [locked, setLocked] = useState(false);
   const [ownerId, setOwnerId] = useState(null);
   const [youAreOwner, setYouAreOwner] = useState(false);
+  const [hasSeenSocket, setHasSeenSocket] = useState(false); // Track if socket has emitted yet
 
   const [allowedEditors, setAllowedEditors] = useState([]);
   const [editRequests, setEditRequests] = useState([]);
@@ -68,6 +73,18 @@ export default function RoomPage() {
   const [leftWidth, setLeftWidth] = useState(() => {
     const saved = Number(localStorage.getItem("syncro-leftWidth"));
     return Number.isFinite(saved) && saved > 0 ? saved : 340;
+  });
+
+  // ✅ input modal for creating files/folders
+  const [inputModal, setInputModal] = useState({
+    isOpen: false,
+    type: null, // 'file', 'folder', 'rename'
+    placeholder: "",
+    defaultValue: "",
+    parentId: null,
+    nodeId: null,
+    inputValue: "",
+    error: "",
   });
 
   // ✅ when user intentionally closes last tab, we "pause" auto-select
@@ -152,7 +169,6 @@ export default function RoomPage() {
     const files = ydoc.getMap("files");
 
     const ensureValidSelection = () => {
-      // If user intentionally closed last tab, respect that (keep no selection)
       if (suppressAutoSelectRef.current && !selectedFileId) return;
 
       if (selectedFileId && files.get(selectedFileId)) return;
@@ -180,7 +196,18 @@ export default function RoomPage() {
     };
   }, [ydoc, selectedFileId]);
 
-  // lock updates
+  // Initialize ownership state from prop
+  useEffect(() => {
+    if (isRoomOwner) {
+      setYouAreOwner(true);
+      console.log("✅ Initialized as room owner from Dashboard prop");
+    } else {
+      setYouAreOwner(false);
+      console.log("👤 Joined room as guest");
+    }
+  }, [isRoomOwner]);
+
+  // lock updates - may override prop-based ownership if socket says different
   useEffect(() => {
     const onRoomLock = ({ roomId: rid, locked: l, ownerId: oid }) => {
       if (rid !== roomId) return;
@@ -188,12 +215,25 @@ export default function RoomPage() {
       setOwnerId(oid || null);
 
       const isOwner = !!oid && !!myUserId && oid === myUserId;
+      
+      // DEBUG: Log the comparison values
+      console.log(`🔍 Socket room-lock: oid="${oid}" vs myUserId="${myUserId}" → isOwner=${isOwner}`);
+      
+      // Only check for contradiction if we've already seen a socket update
+      // (skip first emission to avoid false warnings on initial join)
+      if (hasSeenSocket && isOwner !== youAreOwner) {
+        console.warn(
+          `⚠️ Ownership changed: was ${youAreOwner}, now ${isOwner}. Server says owner is ${oid}`
+        );
+      }
+      
+      setHasSeenSocket(true);
       setYouAreOwner(isOwner);
     };
 
     socket.on("room-lock", onRoomLock);
     return () => socket.off("room-lock", onRoomLock);
-  }, [roomId, myUserId]);
+  }, [roomId, myUserId, youAreOwner, hasSeenSocket]);
 
   // allowlist updates
   useEffect(() => {
@@ -304,27 +344,46 @@ export default function RoomPage() {
 
   // Flatten file tree for command palette search
   const allFiles = useMemo(() => {
-    if (!ydoc) return [];
-    const nodes = ydoc.getMap("fs:nodes");
-    if (!nodes) return [];
+    if (!ready || !ydoc) {
+      return [];
+    }
 
-    const files = [];
-    const walk = (node) => {
-      if (node?.get("type") === "file") {
-        files.push({
-          fileId: node.get("fileId"),
-          name: node.get("name"),
-          type: "file",
-        });
-      }
-    };
-
-    nodes.forEach((node) => {
-      walk(node);
+    // DEBUG: Check what maps exist in ydoc
+    console.log("🔍 DEBUG: Checking ydoc structure...");
+    const allMaps = {};
+    ydoc.share.forEach((value, key) => {
+      allMaps[key] = {
+        type: value.constructor.name,
+        size: value.size !== undefined ? value.size : "N/A"
+      };
     });
+    console.log("📊 All maps in ydoc:", allMaps);
 
-    return files;
-  }, [ydoc]);
+    // Only get fs:nodes - that's where file metadata is
+    const nodesMap = ydoc.getMap("fs:nodes");
+    console.log("📍 fs:nodes size =", nodesMap?.size);
+
+    if (nodesMap && nodesMap.size > 0) {
+      const filesList = [];
+      nodesMap.forEach((nodeValue, nodeId) => {
+        const type = nodeValue.get("type");
+        const name = nodeValue.get("name");
+        if (type === "file" && name) {
+          filesList.push({
+            nodeId,
+            fileId: nodeValue.get("fileId"),
+            name,
+            type: "file",
+          });
+        }
+      });
+      console.log(`✅ Found ${filesList.length} files from fs:nodes`);
+      return filesList;
+    }
+
+    console.log("❌ fs:nodes is empty or not found");
+    return [];
+  }, [ydoc, ready]);
 
   const handleCloseTab = (fileId) => {
     const newOpenFiles = openFiles.filter((f) => f.fileId !== fileId);
@@ -355,23 +414,70 @@ export default function RoomPage() {
   };
 
   const handleCreateFile = (parentId = "root") => {
-    const name = prompt("File name:", "newFile.js");
-    if (name && name.trim()) {
-      socket.emit("fs:create-file", { roomId, parentId, name: name.trim() });
-    }
+    setInputModal({
+      isOpen: true,
+      type: "file",
+      placeholder: "File name",
+      defaultValue: "newFile.js",
+      parentId,
+      nodeId: null,
+      inputValue: "newFile.js",
+      error: "",
+    });
   };
 
   const handleCreateFolder = (parentId = "root") => {
-    const name = prompt("Folder name:", "newFolder");
-    if (name && name.trim()) {
-      socket.emit("fs:create-folder", { roomId, parentId, name: name.trim() });
-    }
+    setInputModal({
+      isOpen: true,
+      type: "folder",
+      placeholder: "Folder name",
+      defaultValue: "newFolder",
+      parentId,
+      nodeId: null,
+      inputValue: "newFolder",
+      error: "",
+    });
   };
 
   const handleRenameFile = (fileId, currentName) => {
-    const newName = prompt("New name:", currentName);
-    if (newName && newName.trim() && newName !== currentName) {
-      socket.emit("fs:rename", { roomId, nodeId: fileId, name: newName.trim() });
+    setInputModal({
+      isOpen: true,
+      type: "rename",
+      placeholder: "New name",
+      defaultValue: currentName,
+      parentId: null,
+      nodeId: fileId,
+      inputValue: currentName,
+      error: "",
+    });
+  };
+
+  const handleInputConfirm = () => {
+    const value = inputModal.inputValue.trim();
+    
+    if (!value) {
+      setInputModal((prev) => ({ ...prev, error: "Name cannot be empty" }));
+      return;
+    }
+
+    if (inputModal.type === "file") {
+      socket.emit("fs:create-file", { roomId, parentId: inputModal.parentId, name: value });
+    } else if (inputModal.type === "folder") {
+      socket.emit("fs:create-folder", { roomId, parentId: inputModal.parentId, name: value });
+    } else if (inputModal.type === "rename") {
+      socket.emit("fs:rename", { roomId, nodeId: inputModal.nodeId, name: value });
+    }
+
+    setInputModal({ isOpen: false, type: null, placeholder: "", defaultValue: "", parentId: null, nodeId: null, inputValue: "", error: "" });
+  };
+
+  const handleInputKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleInputConfirm();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setInputModal({ isOpen: false, type: null, placeholder: "", defaultValue: "", parentId: null, nodeId: null, inputValue: "", error: "" });
     }
   };
 
@@ -757,6 +863,52 @@ export default function RoomPage() {
         onExport={handleExportProject}
         ydoc={ydoc}
       />
+
+      {/* Input Modal (File/Folder/Rename) - Rendered as Portal */}
+      {inputModal.isOpen &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300"
+              onClick={() => setInputModal({ ...inputModal, isOpen: false })}
+            />
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md p-6 animate-in fade-in zoom-in-95 duration-200">
+                <div className="mb-4">
+                  <h3 className="text-lg font-semibold text-zinc-100 mb-1">
+                    {inputModal.type === "file" && "New File"}
+                    {inputModal.type === "folder" && "New Folder"}
+                    {inputModal.type === "rename" && "Rename"}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    {inputModal.type === "file" && "Enter the file name (e.g., index.js, styles.css)"}
+                    {inputModal.type === "folder" && "Enter the folder name"}
+                    {inputModal.type === "rename" && "Enter the new name"}
+                  </p>
+                </div>
+
+                <input
+                  type="text"
+                  autoFocus
+                  value={inputModal.inputValue}
+                  onChange={(e) => setInputModal({ ...inputModal, inputValue: e.target.value, error: "" })}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder={inputModal.placeholder}
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                />
+
+                {inputModal.error && (
+                  <p className="text-xs text-red-400 mt-2">{inputModal.error}</p>
+                )}
+
+                <p className="text-xs text-zinc-500 mt-3">
+                  Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">Enter</kbd> to confirm or <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">Esc</kbd> to cancel
+                </p>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   );
 }

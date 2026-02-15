@@ -279,11 +279,28 @@ function registerRoomHandlers(io, socket) {
 
     try {
       const createdBy = socket.data.userId || null;
-      const item = await repo.createMilestoneFromRoom(roomId, fileId, {
+      const doc = getRoomDoc(roomId);
+      
+      // Get snapshot buffer
+      const snapshotBuffer = Y.encodeStateAsUpdate(doc);
+      
+      // Get file content from files map
+      const files = doc.getMap("files");
+      const ytext = files.get(fileId);
+      const content = ytext ? ytext.toString() : "";
+      
+      // Create version with proper parameters
+      await repo.createVersion({
+        roomId,
+        fileId,
+        kind,
         label,
         createdBy,
+        snapshotBuffer,
+        content,
       });
-      socket.emit("snapshot:create:result", { roomId, fileId, ok: true, item });
+      
+      socket.emit("snapshot:create:result", { roomId, fileId, ok: true });
     } catch (e) {
       console.warn("snapshot:create failed:", e);
       socket.emit("snapshot:create:result", { roomId, fileId, ok: false });
@@ -299,21 +316,21 @@ function registerRoomHandlers(io, socket) {
     if (getRoomLocked(roomId) && !isOwner(socket, roomId)) return;
 
     try {
-      const content = await repo.getContent(roomId, fileId, id);
-      if (typeof content !== "string") return;
+      const version = await repo.getVersion(roomId, fileId, id);
+      if (!version || typeof version.content !== "string") return;
 
       const doc = getRoomDoc(roomId);
 
-      // update the target file text in ydoc fs map
+      // update the target file text in ydoc files map
       doc.transact(() => {
-        const fsTexts = doc.getMap("fs:texts");
-        let ytext = fsTexts.get(fileId);
+        const files = doc.getMap("files");
+        let ytext = files.get(fileId);
         if (!ytext) {
           ytext = new Y.Text();
-          fsTexts.set(fileId, ytext);
+          files.set(fileId, ytext);
         }
         ytext.delete(0, ytext.length);
-        ytext.insert(0, content);
+        ytext.insert(0, version.content);
       }, "snapshot-restore");
 
       broadcastUpdate(roomId);
