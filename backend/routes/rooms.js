@@ -1,5 +1,9 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const {
+  isUserConnectedToRoom,
+  getConnectedUsers,
+} = require("../rooms/roomConnections");
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
@@ -32,6 +36,8 @@ function createRoomRoutes(pool) {
           ur.is_owner, 
           ur.created_at as joined_at,
           ur.last_visited_at,
+          rs.name,
+          rs.description,
           rs.lang,
           rs.owner_id,
           u.name as owner_name
@@ -54,7 +60,7 @@ function createRoomRoutes(pool) {
   // Create new room (user becomes owner)
   router.post("/", verifyToken, async (req, res) => {
     try {
-      const { roomName } = req.body;
+      const { roomName, description } = req.body;
 
       if (!roomName || roomName.trim() === "") {
         return res.status(400).json({ error: "Room name is required" });
@@ -66,10 +72,10 @@ function createRoomRoutes(pool) {
 
       // Create room_settings entry
       await pool.query(
-        `INSERT INTO room_settings (room_id, lang, locked, owner_id)
-        VALUES ($1, $2, $3, $4)
+        `INSERT INTO room_settings (room_id, name, description, lang, locked, owner_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (room_id) DO NOTHING`,
-        [roomId, "js", false, String(req.user.id)]
+        [roomId, roomName.trim(), description?.trim() || null, "js", false, String(req.user.id)]
       );
 
       // Create user_rooms entry (owner)
@@ -103,15 +109,28 @@ function createRoomRoutes(pool) {
       const { roomId } = req.params;
 
       // Check if room exists
-      const roomCheck = await pool.query("SELECT lang FROM room_settings WHERE room_id = $1", [
-        roomId,
-      ]);
+      const roomCheck = await pool.query(
+        "SELECT lang, owner_id FROM room_settings WHERE room_id = $1",
+        [roomId]
+      );
 
       if (roomCheck.rows.length === 0) {
         return res.status(404).json({ error: "Room not found" });
       }
 
       const roomLang = roomCheck.rows[0].lang;
+      const ownerId = roomCheck.rows[0].owner_id;
+      const isOwner = String(ownerId) === String(req.user.id);
+
+      // NEW: Check if owner is online (for non-owners)
+      if (!isOwner && ownerId) {
+        const ownerOnline = isUserConnectedToRoom(roomId, ownerId);
+        if (!ownerOnline) {
+          return res.status(403).json({
+            error: "Room owner is not online. You can only join when the owner is inside the room.",
+          });
+        }
+      }
 
       // Check if user already has this room in their list
       const existingEntry = await pool.query(
@@ -119,10 +138,10 @@ function createRoomRoutes(pool) {
         [req.user.id, roomId]
       );
 
-      let isOwner = false;
+      let existingIsOwner = false;
       if (existingEntry.rows.length > 0) {
         // Preserve existing is_owner status
-        isOwner = existingEntry.rows[0].is_owner;
+        existingIsOwner = existingEntry.rows[0].is_owner;
       }
 
       // Insert or update user_rooms
@@ -132,7 +151,7 @@ function createRoomRoutes(pool) {
         ON CONFLICT (user_id, room_id) DO UPDATE
         SET last_visited_at = NOW()
         RETURNING *`,
-        [req.user.id, roomId, isOwner]
+        [req.user.id, roomId, existingIsOwner]
       );
 
       res.json({
@@ -146,6 +165,79 @@ function createRoomRoutes(pool) {
     } catch (error) {
       console.error("Error joining room:", error);
       res.status(500).json({ error: error.message || "Failed to join room" });
+    }
+  });
+
+  // Check if room owner is online
+  router.get("/:roomId/availability", async (req, res) => {
+    try {
+      const { roomId } = req.params;
+
+      // Check if room exists
+      const roomCheck = await pool.query(
+        "SELECT owner_id, name FROM room_settings WHERE room_id = $1",
+        [roomId]
+      );
+
+      if (roomCheck.rows.length === 0) {
+        return res.status(404).json({ error: "Room not found" });
+      }
+
+      const ownerId = roomCheck.rows[0].owner_id;
+      const roomName = roomCheck.rows[0].name;
+      const ownerOnline = ownerId ? isUserConnectedToRoom(roomId, ownerId) : false;
+      const connectedUsers = getConnectedUsers(roomId);
+
+      res.json({
+        roomId,
+        roomName,
+        ownerOnline,
+        connectedUsers: connectedUsers.length,
+      });
+    } catch (error) {
+      console.error("Error checking room availability:", error);
+      res.status(500).json({ error: "Failed to check room availability" });
+    }
+  });
+
+  // Update room settings (owner only)
+  router.put("/:roomId", verifyToken, async (req, res) => {
+    try {
+      const { roomId } = req.params;
+      const { name, description, lang } = req.body;
+
+      // Check if user is owner
+      const ownerCheck = await pool.query(
+        "SELECT owner_id FROM room_settings WHERE room_id = $1",
+        [roomId]
+      );
+
+      if (ownerCheck.rows.length === 0) {
+        return res.status(404).json({ error: "Room not found" });
+      }
+
+      if (String(ownerCheck.rows[0].owner_id) !== String(req.user.id)) {
+        return res.status(403).json({ error: "Only room owner can update settings" });
+      }
+
+      // Update room settings
+      const updateResult = await pool.query(
+        `UPDATE room_settings 
+        SET name = COALESCE($1, name), 
+            description = $2, 
+            lang = COALESCE($3, lang)
+        WHERE room_id = $4
+        RETURNING room_id, name, description, lang, owner_id`,
+        [name?.trim() || null, description?.trim() || null, lang, roomId]
+      );
+
+      res.json({
+        message: "Room settings updated",
+        room: updateResult.rows[0],
+      });
+    } catch (error) {
+      console.error("Error updating room:", error);
+      res.status(500).json({ error: error.message || "Failed to update room" });
     }
   });
 

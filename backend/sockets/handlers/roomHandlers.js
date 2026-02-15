@@ -30,6 +30,11 @@ const {
   ensureFsDefaults,
 } = require("../../rooms/ydocStore");
 
+const {
+  addUserToRoom,
+  removeUserFromRoom,
+} = require("../../rooms/roomConnections");
+
 function isOwner(socket, roomId) {
   const ownerId = getRoomOwner(roomId);
   const userId = socket.data.userId;
@@ -56,6 +61,12 @@ function registerRoomHandlers(io, socket) {
 
     socket.data.userId = userId || null;
     socket.data.name = name || null;
+    socket.data.roomId = roomId; // Track which room user is in
+
+    // ✅ Track user connection to room
+    if (userId) {
+      addUserToRoom(roomId, userId);
+    }
 
     // ✅ NEW: load persisted room settings into memory cache
     await hydrateRoom(roomId);
@@ -343,6 +354,11 @@ function registerRoomHandlers(io, socket) {
   });
 
   socket.on("disconnecting", () => {
+    // ✅ Remove user from room connections tracking
+    if (socket.data.userId && socket.data.roomId) {
+      removeUserFromRoom(socket.data.roomId, socket.data.userId);
+    }
+
     for (const roomId of socket.rooms) {
       if (roomId === socket.id) continue;
       // schedule cleanup if room empties

@@ -20,7 +20,7 @@ export const roomsAPI = {
     return data.rooms;
   },
 
-  async createRoom(roomName) {
+  async createRoom(roomName, description = "") {
     const token = this.getToken();
     const response = await fetch(`${API_BASE_URL}/rooms`, {
       method: "POST",
@@ -28,7 +28,10 @@ export const roomsAPI = {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ roomName }),
+      body: JSON.stringify({ 
+        roomName,
+        description: description || undefined
+      }),
     });
 
     if (!response.ok) {
@@ -54,6 +57,44 @@ export const roomsAPI = {
 
     const data = await response.json();
     return data.room;
+  },
+
+  async checkRoomAvailability(roomId) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/availability`);
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Room not found");
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  },
+
+  async updateRoom(roomId, updates) {
+    const token = this.getToken();
+    const url = `${API_BASE_URL}/rooms/${roomId}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(updates),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to update room");
+    }
+
+    const data = await response.json();
+    return data;
   },
 
   async deleteRoom(roomId) {

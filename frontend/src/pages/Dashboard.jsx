@@ -15,13 +15,24 @@ export default function Dashboard() {
   const [createRoomModalOpen, setCreateRoomModalOpen] = useState(false);
   const [joinRoomModalOpen, setJoinRoomModalOpen] = useState(false);
   const [deleteRoomModalOpen, setDeleteRoomModalOpen] = useState(false);
+  const [settingsRoomModalOpen, setSettingsRoomModalOpen] = useState(false);
   const [createRoomName, setCreateRoomName] = useState("");
+  const [createRoomDescription, setCreateRoomDescription] = useState("");
   const [joinRoomId, setJoinRoomId] = useState("");
   const [roomToDelete, setRoomToDelete] = useState(null);
+  const [roomToManage, setRoomToManage] = useState(null);
+  const [newRoomName, setNewRoomName] = useState("");
+  const [newRoomDescription, setNewRoomDescription] = useState("");
+  const [newRoomLanguage, setNewRoomLanguage] = useState("js");
+  const [roomAvailability, setRoomAvailability] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [entering, setEntering] = useState(false);
+  const [enteringRoomId, setEnteringRoomId] = useState(null);
 
   // Load rooms
   useEffect(() => {
@@ -39,6 +50,45 @@ export default function Dashboard() {
 
     loadRooms();
   }, []);
+
+  // Check room availability when join room ID changes
+  useEffect(() => {
+    if (!joinRoomId.trim() || !joinRoomModalOpen) {
+      setRoomAvailability(null);
+      return;
+    }
+
+    const checkAvailability = async () => {
+      setCheckingAvailability(true);
+      try {
+        const availability = await roomsAPI.checkRoomAvailability(joinRoomId);
+        setRoomAvailability(availability);
+      } catch (err) {
+        console.error("Failed to check room availability:", err);
+        setRoomAvailability(null);
+      } finally {
+        setCheckingAvailability(false);
+      }
+    };
+
+    // Debounce availability check
+    const timer = setTimeout(checkAvailability, 500);
+    return () => clearTimeout(timer);
+  }, [joinRoomId, joinRoomModalOpen]);
+
+  // Auto-dismiss error message
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(""), 5000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
+  // Auto-dismiss success message
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = setTimeout(() => setSuccessMessage(""), 4000);
+    return () => clearTimeout(timer);
+  }, [successMessage]);
 
   const reloadRooms = async () => {
     try {
@@ -60,9 +110,10 @@ export default function Dashboard() {
         throw new Error("Room name is required");
       }
 
-      const newRoom = await roomsAPI.createRoom(createRoomName);
+      const newRoom = await roomsAPI.createRoom(createRoomName, createRoomDescription);
       await reloadRooms();
       setCreateRoomName("");
+      setCreateRoomDescription("");
       setCreateRoomModalOpen(false);
       setSuccessMessage(`Room "${createRoomName}" created! Redirecting...`);
 
@@ -135,10 +186,39 @@ export default function Dashboard() {
     navigate("/");
   };
 
-  const handleEnterRoom = (roomId, isOwner = false) => {
-    navigate(`/room/${roomId}`, {
-      state: { isOwner },
-    });
+  const handleEnterRoom = async (roomId, isOwner = false) => {
+    // If user is the owner, they can always enter
+    if (isOwner) {
+      setEnteringRoomId(roomId);
+      setEntering(true);
+      navigate(`/room/${roomId}`, {
+        state: { isOwner },
+      });
+      return;
+    }
+
+    // For non-owners, check if owner is online
+    setEnteringRoomId(roomId);
+    setEntering(true);
+    try {
+      setError("");
+      const availability = await roomsAPI.checkRoomAvailability(roomId);
+      
+      if (!availability.ownerOnline) {
+        setError("❌ Room owner is not online. You can only enter when the owner is inside the room.");
+        setEntering(false);
+        setEnteringRoomId(null);
+        return;
+      }
+
+      navigate(`/room/${roomId}`, {
+        state: { isOwner },
+      });
+    } catch (err) {
+      setError(`❌ ${err.message}`);
+      setEntering(false);
+      setEnteringRoomId(null);
+    }
   };
 
   const ownedRooms = rooms.filter((r) => r.is_owner);
@@ -197,20 +277,26 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* Fixed Notifications - positioned at original location */}
+      <div className="fixed left-0 right-0 z-50 pointer-events-none" style={{ top: '108px' }}>
+        <div className="mx-auto max-w-7xl px-6 pt-0">
+          {error && (
+            <div className="mb-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 animate-slide-in shadow-lg pointer-events-auto">
+              {error}
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="mb-4 p-4 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 animate-slide-in shadow-lg pointer-events-auto">
+              {successMessage}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Main Content */}
       <main className="relative mx-auto max-w-7xl px-6 py-12">
-        {/* Messages */}
-        {error && (
-          <div className="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 animate-slide-in">
-            {error}
-          </div>
-        )}
-
-        {successMessage && (
-          <div className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 animate-slide-in">
-            {successMessage}
-          </div>
-        )}
+        {/* Messages - Removed (moved to fixed position at top) */}
 
         {/* Action Buttons */}
         <div className="mb-12 flex gap-4">
@@ -263,15 +349,20 @@ export default function Dashboard() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="text-xl font-bold text-zinc-100">
-                                Room {room.room_id}
+                                {room.name || "Untitled Room"}
                               </h3>
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                                 Owner
                               </span>
                             </div>
-                            <p className="text-sm text-zinc-400 mt-1">Language: {room.lang || "js"}</p>
+                            <p className="text-xs text-zinc-400 mt-2">ID: <span className="font-mono">{room.room_id}</span></p>
+                            <p className="text-xs text-zinc-400">Language: {room.lang || "js"}</p>
                           </div>
                         </div>
+
+                        {room.description && (
+                          <p className="text-sm text-zinc-300 mb-4 italic">{room.description}</p>
+                        )}
 
                         <p className="text-xs text-zinc-500 mb-4">
                           Created {new Date(room.joined_at).toLocaleDateString()}
@@ -280,9 +371,30 @@ export default function Dashboard() {
                         <div className="flex gap-3">
                           <button
                             onClick={() => handleEnterRoom(room.room_id, room.is_owner)}
-                            className="flex-1 px-4 py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white font-medium transition-colors text-sm"
+                            disabled={entering && enteringRoomId === room.room_id}
+                            className="flex-1 px-4 py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white font-medium transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                           >
-                            Enter
+                            {entering && enteringRoomId === room.room_id ? (
+                              <>
+                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                                Entering...
+                              </>
+                            ) : (
+                              "Enter"
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRoomToManage(room);
+                              setNewRoomName(room.name || "");
+                              setNewRoomDescription(room.description || "");
+                              setNewRoomLanguage(room.lang || "js");
+                              setSettingsRoomModalOpen(true);
+                            }}
+                            className="px-3 py-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors text-sm"
+                            title="Room Settings"
+                          >
+                            ⚙
                           </button>
                           <button
                             onClick={() => handleDeleteRoom(room.room_id)}
@@ -318,15 +430,20 @@ export default function Dashboard() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="text-xl font-bold text-zinc-100">
-                                Room {room.room_id}
+                                {room.name || "Untitled Room"}
                               </h3>
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                                 Guest
                               </span>
                             </div>
-                            <p className="text-sm text-zinc-400 mt-1">Language: {room.lang || "js"}</p>
+                            <p className="text-xs text-zinc-400 mt-2">ID: <span className="font-mono">{room.room_id}</span></p>
+                            <p className="text-xs text-zinc-400">Language: {room.lang || "js"}</p>
                           </div>
                         </div>
+
+                        {room.description && (
+                          <p className="text-sm text-zinc-300 mb-4 italic">{room.description}</p>
+                        )}
 
                         <p className="text-xs text-zinc-500 mb-4">
                           Last visited {new Date(room.last_visited_at).toLocaleDateString()}
@@ -334,9 +451,17 @@ export default function Dashboard() {
 
                         <button
                           onClick={() => handleEnterRoom(room.room_id, room.is_owner)}
-                          className="w-full px-4 py-2 rounded-lg bg-cyan-600/80 hover:bg-cyan-600 text-white font-medium transition-colors text-sm"
+                          disabled={entering && enteringRoomId === room.room_id}
+                          className="w-full px-4 py-2 rounded-lg bg-cyan-600/80 hover:bg-cyan-600 text-white font-medium transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
-                          Enter Room
+                          {entering && enteringRoomId === room.room_id ? (
+                            <>
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                              Entering...
+                            </>
+                          ) : (
+                            "Enter Room"
+                          )}
                         </button>
                       </div>
                     </div>
@@ -396,6 +521,18 @@ export default function Dashboard() {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2">Description <span className="text-xs text-zinc-500">(optional)</span></label>
+                <textarea
+                  value={createRoomDescription}
+                  onChange={(e) => setCreateRoomDescription(e.target.value)}
+                  placeholder="e.g., Backend refactor for auth module"
+                  rows="2"
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none transition-colors resize-none"
+                  disabled={creating}
+                />
+              </div>
+
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -446,6 +583,38 @@ export default function Dashboard() {
                 <p className="text-xs text-zinc-500 mt-2">Ask someone in the room to share the room ID</p>
               </div>
 
+              {/* Room Availability Check */}
+              {checkingAvailability && joinRoomId.trim() && (
+                <div className="p-3 rounded-lg bg-zinc-800/50 border border-zinc-700 text-sm text-zinc-400">
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-cyan-500" />
+                    Checking room...
+                  </div>
+                </div>
+              )}
+
+              {roomAvailability && !checkingAvailability && (
+                <div className={`p-3 rounded-lg border ${
+                  roomAvailability.ownerOnline
+                    ? "bg-green-500/10 border-green-500/30 text-green-400"
+                    : "bg-red-500/10 border-red-500/30 text-red-400"
+                }`}>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {roomAvailability.ownerOnline ? (
+                      <>
+                        <span className="h-2 w-2 bg-green-500 rounded-full" />
+                        Owner is online ✓
+                      </>
+                    ) : (
+                      <>
+                        <span className="h-2 w-2 bg-red-500 rounded-full" />
+                        Owner is offline - cannot join
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -457,7 +626,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="submit"
-                  disabled={joining}
+                  disabled={joining || (roomAvailability && !roomAvailability.ownerOnline)}
                   className="flex-1 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   {joining ? (
@@ -519,6 +688,131 @@ export default function Dashboard() {
                   </>
                 ) : (
                   "Delete Room"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Room Modal */}
+      {settingsRoomModalOpen && roomToManage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md maximum-h-[90vh] overflow-y-auto animate-slide-in">
+            {/* Header */}
+            <div className="sticky top-0 bg-zinc-900 border-b border-zinc-800 p-6">
+              <h3 className="text-xl font-bold text-zinc-100">Room Settings</h3>
+              <p className="text-sm text-zinc-400 mt-1">{roomToManage.name || "Untitled Room"}</p>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Language Setting */}
+              <div>
+                <label className="block text-sm font-semibold text-zinc-300 mb-2">
+                  🔤 Programming Language
+                </label>
+                <select
+                  value={newRoomLanguage}
+                  onChange={(e) => setNewRoomLanguage(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                >
+                  <option value="js">JavaScript</option>
+                  <option value="py">Python</option>
+                  <option value="ts">TypeScript</option>
+                  <option value="java">Java</option>
+                  <option value="cpp">C++</option>
+                  <option value="csharp">C#</option>
+                  <option value="ruby">Ruby</option>
+                  <option value="go">Go</option>
+                  <option value="rust">Rust</option>
+                </select>
+              </div>
+
+              {/* Rename Room */}
+              <div>
+                <label className="block text-sm font-semibold text-zinc-300 mb-2">
+                  ✏️ Room Name
+                </label>
+                <input
+                  type="text"
+                  value={newRoomName}
+                  onChange={(e) => setNewRoomName(e.target.value)}
+                  placeholder="Enter room name"
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+              </div>
+
+              {/* Room Description */}
+              <div>
+                <label className="block text-sm font-semibold text-zinc-300 mb-2">
+                  📝 Description
+                </label>
+                <textarea
+                  value={newRoomDescription}
+                  onChange={(e) => setNewRoomDescription(e.target.value)}
+                  placeholder="Enter room description (optional)"
+                  rows="3"
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none transition-colors resize-none"
+                />
+              </div>
+
+              {/* Delete Room from Settings */}
+              <div>
+                <button
+                  onClick={() => {
+                    setSettingsRoomModalOpen(false);
+                    handleDeleteRoom(roomToManage.room_id);
+                  }}
+                  className="w-full px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-colors font-medium"
+                >
+                  🗑️ Delete Room
+                </button>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 bg-zinc-900 border-t border-zinc-800 p-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setSettingsRoomModalOpen(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={updating}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setUpdating(true);
+                  try {
+                    // Update room settings
+                    await roomsAPI.updateRoom(roomToManage.room_id, {
+                      name: newRoomName,
+                      description: newRoomDescription,
+                      lang: newRoomLanguage,
+                    });
+
+                    setSuccessMessage("Room settings updated successfully!");
+                    setSettingsRoomModalOpen(false);
+                    await reloadRooms(); // Reload rooms to reflect changes
+                  } catch (err) {
+                    setError(err.message || "Failed to update room settings");
+                    console.error("Error updating room:", err);
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+                disabled={updating || !newRoomName.trim()}
+                className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {updating ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
                 )}
               </button>
             </div>

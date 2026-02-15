@@ -47,6 +47,8 @@ async function initDb(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.room_settings (
       room_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT 'Untitled Room',
+      description TEXT DEFAULT NULL,
       lang TEXT NOT NULL DEFAULT 'js',
       locked BOOLEAN NOT NULL DEFAULT FALSE,
       owner_id TEXT NULL,
@@ -60,6 +62,17 @@ async function initDb(pool) {
     ON public.room_settings(updated_at);
   `);
 
+  // Migration: Add name column if it doesn't exist
+  await pool.query(`
+    ALTER TABLE public.room_settings
+    ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Untitled Room';
+  `);
+
+  // Migration: Add description column if it doesn't exist
+  await pool.query(`
+    ALTER TABLE public.room_settings
+    ADD COLUMN IF NOT EXISTS description TEXT DEFAULT NULL;
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.room_snapshots (
