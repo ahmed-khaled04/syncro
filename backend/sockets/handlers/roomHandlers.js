@@ -63,6 +63,8 @@ function registerRoomHandlers(io, socket) {
     socket.data.name = name || null;
     socket.data.roomId = roomId; // Track which room user is in
 
+    console.log(`✅ User joined room: userId=${userId}, roomId=${roomId}, name=${name}`);
+
     // ✅ Track user connection to room
     if (userId) {
       addUserToRoom(roomId, userId);
@@ -77,6 +79,7 @@ function registerRoomHandlers(io, socket) {
     // owner private room (for edit requests)
     if (ownerId && userId && ownerId === userId) {
       socket.join(`owner:${roomId}`);
+      console.log(`👑 User ${userId} is owner of room ${roomId}`);
     }
 
     await waitRoomReady(roomId);
@@ -113,9 +116,20 @@ function registerRoomHandlers(io, socket) {
   socket.on("set-room-lock", ({ roomId, locked }) => {
     const ownerId = getRoomOwner(roomId);
     const userId = socket.data.userId;
-    if (!ownerId || ownerId !== userId) return;
+    
+    console.log(`🔐 set-room-lock requested:`);
+    console.log(`   roomId=${roomId}`);
+    console.log(`   userId=${userId} (type: ${typeof userId})`);
+    console.log(`   ownerId=${ownerId} (type: ${typeof ownerId})`);
+    console.log(`   comparison: ${ownerId} === ${userId} ? ${ownerId === userId}`);
+    
+    if (!ownerId || ownerId !== userId) {
+      console.warn(`❌ Unauthorized lock attempt: userId="${userId}" is not owner="${ownerId}"`);
+      return;
+    }
 
     const next = setRoomLocked(roomId, locked);
+    console.log(`✅ Room locked: ${next}`);
 
     io.to(roomId).emit("room-lock", { roomId, locked: next, ownerId });
 

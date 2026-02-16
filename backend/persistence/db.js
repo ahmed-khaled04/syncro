@@ -114,6 +114,24 @@ async function initDb(pool) {
     CREATE INDEX IF NOT EXISTS idx_room_versions_room_file_created
     ON public.room_snapshot_versions (room_id, file_id, created_at DESC);
   `);
+
+  await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.room_invites (
+        id BIGSERIAL PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NULL,
+        revoked BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        redeemed_by TEXT NULL,
+        redeemed_at TIMESTAMPTZ NULL
+      );
+  `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_room_invites_room
+        ON public.room_invites(room_id);
+    `);
 }
 
 module.exports = { createPool, initDb };

@@ -69,7 +69,9 @@ async function hydrateRoom(roomId) {
 
     roomLang.set(roomId, row.lang || "js");
     roomLock.set(roomId, !!row.locked);
-    roomOwner.set(roomId, row.owner_id || null);
+    roomOwner.set(roomId, row.owner_id ? String(row.owner_id) : null);
+    
+    console.log(`🏠 Hydrated room ${roomId}: owner_id=${row.owner_id} (type: ${typeof row.owner_id}), stored as: ${String(row.owner_id)}`);
 
     const set = _ensureEditorsSet(roomId);
     set.clear();
@@ -168,7 +170,9 @@ function ensureRoomOwner(roomId, userId) {
   const current = roomOwner.get(roomId) || null;
 
   if (!current && userId) {
-    roomOwner.set(roomId, userId);
+    const ownerIdStr = String(userId);
+    roomOwner.set(roomId, ownerIdStr);
+    console.log(`👑 Set room owner: roomId=${roomId}, userId=${ownerIdStr}`);
     _schedulePersist(roomId);
   }
 

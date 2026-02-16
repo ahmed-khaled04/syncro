@@ -43,11 +43,12 @@ export const roomsAPI = {
     return data.room;
   },
 
-  async joinRoom(roomId) {
+  async joinRoom(roomId , inviteToken) {
     const token = this.getToken();
     const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(inviteToken ? {inviteToken}: {}),
     });
 
     if (!response.ok) {
@@ -122,4 +123,74 @@ export const roomsAPI = {
     console.log(`✅ Room deleted:`, data);
     return data;
   },
+
+  async createInvite(roomId, { expiresInMinutes } = {}) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/invites`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ expiresInMinutes }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to create invite");
+    }
+
+    const data = await response.json();
+    return data.invite; // { roomId, token, inviteUrl, expiresAt }
+  },
+
+  async listInvites(roomId) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/invites`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to list invites");
+    }
+
+    const data = await response.json();
+    return data.invites;
+  },
+
+  async revokeInvite(inviteToken) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/invites/${inviteToken}/revoke`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to revoke invite");
+    }
+
+    return await response.json();
+  },
+
+  async validateInvite(roomId, inviteToken) {
+    const qs = new URLSearchParams({ roomId, token: inviteToken }).toString();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/invites/validate?${qs}`);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to validate invite");
+    }
+
+    return await response.json(); // { valid, invite? }
+  },
+
+
+
+
 };

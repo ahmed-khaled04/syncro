@@ -7,6 +7,7 @@ import { useRoomLanguage } from "../hooks/useRoomLanguage";
 import { useYjsSync } from "../hooks/useYjsSync";
 import { detectLanguageFromFilename } from "../utils/languageDetector";
 import { exportProjectAsZip } from "../utils/projectExporter";
+import { roomsAPI } from "../api/rooms";
 import EditorHeader from "../components/EditorHeader";
 import CollabEditor from "../components/CollabEditor";
 import FileExplorer from "../components/FileExplorer";
@@ -22,7 +23,8 @@ export default function RoomPage() {
 
   // Use authenticated user's name, fallback to location state for backwards compatibility
   const name = user?.name || location.state?.name;
-  const isRoomOwner = location.state?.isOwner || false;
+  // Initialize ownership from API response (single source of truth)
+  const [youAreOwner, setYouAreOwner] = useState(location.state?.isOwner || false);
 
   // All hooks must be called before any conditional returns
   const { ydoc, awareness, synced, ready } = useYjsSync(socket, roomId, name);
@@ -40,42 +42,54 @@ export default function RoomPage() {
     }
   }, []);
 
+    // Invite UI (Owner only)
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+  const [inviteExpiry, setInviteExpiry] = useState(60); // minutes, 0 = no expiry
+  const [invites, setInvites] = useState([]);
+  const [latestInviteLink, setLatestInviteLink] = useState("");
+
+  const [joinState, setJoinState] = useState({
+    status: "checking", // "checking" | "ok" | "error"
+    error: "",
+  });
+
+
   const [locked, setLocked] = useState(false);
   const [ownerId, setOwnerId] = useState(null);
-  const [youAreOwner, setYouAreOwner] = useState(false);
-  const [hasSeenSocket, setHasSeenSocket] = useState(false); // Track if socket has emitted yet
 
   const [allowedEditors, setAllowedEditors] = useState([]);
   const [editRequests, setEditRequests] = useState([]);
 
   const [userDirectory, setUserDirectory] = useState({});
 
-  // ✅ selection
+  //  selection
   const [selectedFileId, setSelectedFileId] = useState(null);
 
-  // ✅ tabs
+  //  tabs
   const [openFiles, setOpenFiles] = useState([]);
 
-  // ✅ dirty tracking
+  //  dirty tracking
   const [dirtyFiles, setDirtyFiles] = useState(new Set());
   const [lastSavedContent, setLastSavedContent] = useState(new Map());
 
-  // ✅ command palette
+  //  command palette
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
-  // ✅ snapshot panel modal
+  //  snapshot panel modal
   const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
 
-  // ✅ sidebar collapse state
+  //  sidebar collapse state
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // ✅ resizable sidebars (VS Code style)
+  //  resizable sidebars (VS Code style)
   const [leftWidth, setLeftWidth] = useState(() => {
     const saved = Number(localStorage.getItem("syncro-leftWidth"));
     return Number.isFinite(saved) && saved > 0 ? saved : 340;
   });
 
-  // ✅ input modal for creating files/folders
+  //  input modal for creating files/folders
   const [inputModal, setInputModal] = useState({
     isOpen: false,
     type: null, // 'file', 'folder', 'rename'
@@ -87,7 +101,7 @@ export default function RoomPage() {
     error: "",
   });
 
-  // ✅ when user intentionally closes last tab, we "pause" auto-select
+  //  when user intentionally closes last tab, we "pause" auto-select
   const suppressAutoSelectRef = useRef(false);
   const suppressTimerRef = useRef(null);
 
@@ -114,6 +128,71 @@ export default function RoomPage() {
   const fileLanguage = useMemo(() => {
     return selectedFileName ? detectLanguageFromFilename(selectedFileName) : "js";
   }, [selectedFileName]);
+
+  const buildFullInviteLink = (inviteUrl) => {
+    // inviteUrl from backend looks like /room/:roomId?invite=...
+    return `${window.location.origin}${inviteUrl}`;
+  };
+
+  const loadInvites = async () => {
+    if (!youAreOwner) return;
+    try {
+      const items = await roomsAPI.listInvites(roomId);
+      setInvites(Array.isArray(items) ? items : []);
+    } catch (e) {
+      // keep silent or show error
+      console.warn("listInvites failed:", e);
+    }
+  };
+
+  const handleGenerateInvite = async () => {
+    setInviteError("");
+    setInviteLoading(true);
+    try {
+      const invite = await roomsAPI.createInvite(roomId, {
+        expiresInMinutes: inviteExpiry > 0 ? inviteExpiry : undefined,
+      });
+
+      const full = buildFullInviteLink(invite.inviteUrl);
+      setLatestInviteLink(full);
+
+      // refresh list
+      await loadInvites();
+
+      // auto copy
+      try {
+        await navigator.clipboard.writeText(full);
+      } catch {
+        // clipboard may fail (http / permissions) - still show link
+      }
+    } catch (e) {
+      setInviteError(e.message || "Failed to create invite");
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
+  const handleCopy = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      setInviteError("Copy failed (browser blocked clipboard).");
+    }
+  };
+
+  const handleRevokeInvite = async (token) => {
+    setInviteError("");
+    setInviteLoading(true);
+    try {
+      await roomsAPI.revokeInvite(token);
+      await loadInvites();
+    } catch (e) {
+      setInviteError(e.message || "Failed to revoke invite");
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
 
   // awareness: current viewed file
   useEffect(() => {
@@ -161,7 +240,7 @@ export default function RoomPage() {
     }
   }, [ytext, selectedFileId, lastSavedContent]);
 
-  // ✅ auto-select first file (but NOT if user just closed last tab)
+  //  auto-select first file (but NOT if user just closed last tab)
   useEffect(() => {
     if (!ydoc) return;
 
@@ -196,44 +275,34 @@ export default function RoomPage() {
     };
   }, [ydoc, selectedFileId]);
 
-  // Initialize ownership state from prop
+  // Log ownership status
   useEffect(() => {
-    if (isRoomOwner) {
-      setYouAreOwner(true);
-      console.log("✅ Initialized as room owner from Dashboard prop");
-    } else {
-      setYouAreOwner(false);
-      console.log("👤 Joined room as guest");
-    }
-  }, [isRoomOwner]);
+    console.log(`👤 Room status: ${youAreOwner ? "✅ You are the owner" : "👥 You are a guest"}`);
+  }, [youAreOwner]);
 
-  // lock updates - may override prop-based ownership if socket says different
+  useEffect(() => {
+    if (!youAreOwner) return;
+    if (!inviteOpen) return;
+    loadInvites();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteOpen, youAreOwner, roomId]);
+
+  // lock updates - track locked state and ownerId from socket
+  // Ownership (youAreOwner) is determined by API response, not socket
   useEffect(() => {
     const onRoomLock = ({ roomId: rid, locked: l, ownerId: oid }) => {
       if (rid !== roomId) return;
       setLocked(!!l);
       setOwnerId(oid || null);
-
-      const isOwner = !!oid && !!myUserId && oid === myUserId;
       
-      // DEBUG: Log the comparison values
-      console.log(`🔍 Socket room-lock: oid="${oid}" vs myUserId="${myUserId}" → isOwner=${isOwner}`);
-      
-      // Only check for contradiction if we've already seen a socket update
-      // (skip first emission to avoid false warnings on initial join)
-      if (hasSeenSocket && isOwner !== youAreOwner) {
-        console.warn(
-          `⚠️ Ownership changed: was ${youAreOwner}, now ${isOwner}. Server says owner is ${oid}`
-        );
-      }
-      
-      setHasSeenSocket(true);
-      setYouAreOwner(isOwner);
+      // NOTE: youAreOwner is set from API response (location.state) and not overridden here
+      // to avoid conflicts between API and socket data
+      console.log(`🔍 Socket room-lock: locked=${l}, ownerId=${oid}`);
     };
 
     socket.on("room-lock", onRoomLock);
     return () => socket.off("room-lock", onRoomLock);
-  }, [roomId, myUserId, youAreOwner, hasSeenSocket]);
+  }, [roomId]);
 
   // allowlist updates
   useEffect(() => {
@@ -342,6 +411,50 @@ export default function RoomPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [snapshotPanelOpen]);
 
+  const inviteToken = useMemo(() => {
+    return new URLSearchParams(location.search).get("invite");
+  }, [location.search]);
+
+    useEffect(() => {
+      let cancelled = false;
+
+      async function doJoin() {
+        // must be logged in (you already redirect if !name, but token matters)
+        const token = roomsAPI.getToken?.() || localStorage.getItem("syncro-token");
+        if (!token) {
+          if (!cancelled) setJoinState({ status: "error", error: "Please log in again." });
+          return;
+        }
+
+        setJoinState({ status: "checking", error: "" });
+
+        try {
+          await roomsAPI.joinRoom(roomId, inviteToken || undefined);
+
+          if (!cancelled) setJoinState({ status: "ok", error: "" });
+
+          if (inviteToken) {
+            const params = new URLSearchParams(location.search);
+            params.delete("invite");
+            navigate(`${location.pathname}${params.toString() ? `?${params}` : ""}`, { replace: true });
+          }
+        } catch (e) {
+          if (!cancelled) setJoinState({ status: "error", error: e.message || "Failed to join room" });
+        }
+      }
+
+      if (roomId) doJoin();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [roomId, inviteToken, navigate, location.pathname, location.search]);
+
+
+
+
+  
+
   // Flatten file tree for command palette search
   const allFiles = useMemo(() => {
     if (!ready || !ydoc) {
@@ -377,7 +490,7 @@ export default function RoomPage() {
           });
         }
       });
-      console.log(`✅ Found ${filesList.length} files from fs:nodes`);
+      console.log(` Found ${filesList.length} files from fs:nodes`);
       return filesList;
     }
 
@@ -401,7 +514,7 @@ export default function RoomPage() {
       if (newOpenFiles.length > 0) {
         setSelectedFileId(newOpenFiles[0].fileId);
       } else {
-        // ✅ closing last tab -> keep no selection and temporarily suppress auto-select
+        //  closing last tab -> keep no selection and temporarily suppress auto-select
         setSelectedFileId(null);
 
         suppressAutoSelectRef.current = true;
@@ -550,6 +663,55 @@ export default function RoomPage() {
 
   if (!name) return <Navigate to="/" replace />;
 
+    if (joinState.status === "checking") {
+      return (
+        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-700 border-t-indigo-500" />
+            <p className="text-sm text-zinc-400">Joining room…</p>
+            {inviteToken && (
+              <p className="text-xs text-zinc-600 font-mono">
+                Using invite token…
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (joinState.status === "error") {
+      return (
+        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
+            <div className="text-lg font-semibold">Can’t join room</div>
+            <div className="text-sm text-zinc-400 mt-2">{joinState.error}</div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                className="px-4 py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20"
+                onClick={() => window.location.reload()}
+              >
+                Retry
+              </button>
+              <button
+                className="px-4 py-2 rounded-xl bg-zinc-800/40 border border-zinc-700/50 text-zinc-200 hover:bg-zinc-800"
+                onClick={() => navigate("/dashboard")}
+              >
+                Back to dashboard
+              </button>
+            </div>
+
+            {inviteToken && (
+              <div className="mt-4 text-xs text-zinc-500">
+                If this invite is single-use, it may already be used or revoked.
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950 text-zinc-100 overflow-hidden flex flex-col">
       <style>{`
@@ -619,6 +781,17 @@ export default function RoomPage() {
 
           {/* Right */}
           <div className="flex items-center gap-2">
+            {youAreOwner && (
+              <button
+                type="button"
+                onClick={() => setInviteOpen(true)}
+                className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/20 text-xs text-indigo-200 transition-all duration-200 border border-indigo-500/20"
+                title="Generate invite link"
+              >
+                <span>🔗</span>
+                <span className="hidden sm:inline">Invite</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setSnapshotPanelOpen(true)}
@@ -863,6 +1036,180 @@ export default function RoomPage() {
         onExport={handleExportProject}
         ydoc={ydoc}
       />
+
+      {inviteOpen && youAreOwner && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+            onClick={() => setInviteOpen(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between p-5 border-b border-zinc-800">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">Invite Links</div>
+                  <div className="text-xs text-zinc-500">Create one-time invite links for this room.</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInviteOpen(false)}
+                  className="p-2 rounded-xl hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-4">
+                {/* Create */}
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                    <div className="flex-1">
+                      <label className="block text-xs text-zinc-400 mb-1">Expiry (minutes)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={inviteExpiry}
+                        onChange={(e) => setInviteExpiry(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-indigo-500"
+                        placeholder="60"
+                      />
+                      <div className="text-[11px] text-zinc-500 mt-1">
+                        Use <span className="font-mono">0</span> for no expiry.
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateInvite}
+                      disabled={inviteLoading}
+                      className="px-4 py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50"
+                    >
+                      {inviteLoading ? "Creating..." : "Generate Invite"}
+                    </button>
+                  </div>
+
+                  {latestInviteLink && (
+                    <div className="mt-4">
+                      <div className="text-xs text-zinc-400 mb-2">Latest invite link</div>
+                      <div className="flex gap-2">
+                        <input
+                          readOnly
+                          value={latestInviteLink}
+                          className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(latestInviteLink)}
+                          className="px-3 py-2 rounded-xl bg-zinc-800/40 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-200"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {inviteError && (
+                    <div className="mt-3 text-xs text-rose-300">{inviteError}</div>
+                  )}
+                </div>
+
+                {/* List */}
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/20 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+                    <div className="text-xs font-semibold text-zinc-300">Invites</div>
+                    <button
+                      type="button"
+                      onClick={loadInvites}
+                      className="text-xs text-zinc-400 hover:text-zinc-200"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+
+                  <div className="max-h-[320px] overflow-auto">
+                    {invites.length === 0 ? (
+                      <div className="p-4 text-xs text-zinc-500">No invites yet.</div>
+                    ) : (
+                      <div className="divide-y divide-zinc-800">
+                        {invites.map((inv) => {
+                          const link = buildFullInviteLink(`/room/${roomId}?invite=${inv.token}`);
+                          const used = !!inv.redeemed_at;
+                          const revoked = !!inv.revoked;
+
+                          let status = "Active";
+                          if (revoked) status = "Revoked";
+                          else if (used) status = "Used";
+
+                          return (
+                            <div key={inv.id || inv.token} className="p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-mono text-zinc-200 truncate">
+                                      {inv.token}
+                                    </span>
+                                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-300">
+                                      {status}
+                                    </span>
+                                  </div>
+
+                                  <div className="mt-2 flex gap-2">
+                                    <input
+                                      readOnly
+                                      value={link}
+                                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-xs"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopy(link)}
+                                      className="px-3 py-2 rounded-xl bg-zinc-800/40 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-200"
+                                    >
+                                      Copy
+                                    </button>
+                                  </div>
+
+                                  <div className="mt-2 text-[11px] text-zinc-500">
+                                    {inv.expires_at ? `Expires: ${new Date(inv.expires_at).toLocaleString()}` : "No expiry"}
+                                    {used && inv.redeemed_at ? ` • Redeemed: ${new Date(inv.redeemed_at).toLocaleString()}` : ""}
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={inviteLoading || revoked}
+                                  onClick={() => handleRevokeInvite(inv.token)}
+                                  className="px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/20 text-rose-100 text-xs disabled:opacity-50"
+                                >
+                                  Revoke
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-zinc-800 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => setInviteOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-zinc-800/40 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-200"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
 
       {/* Input Modal (File/Folder/Rename) - Rendered as Portal */}
       {inputModal.isOpen &&

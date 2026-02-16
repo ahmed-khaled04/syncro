@@ -5,6 +5,9 @@ const {
   getConnectedUsers,
 } = require("../rooms/roomConnections");
 
+const crypto = require("crypto");
+
+
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 
@@ -24,6 +27,54 @@ function verifyToken(req, res, next) {
   }
 }
 
+
+function makeInviteToken() {
+  // 16 bytes => 32 hex chars (good enough, hard to guess)
+  return crypto.randomBytes(16).toString("hex");
+}
+
+async function assertOwner(pool, roomId, userId) {
+  const ownerCheck = await pool.query(
+    "SELECT owner_id FROM room_settings WHERE room_id = $1",
+    [roomId]
+  );
+
+  if (ownerCheck.rows.length === 0) {
+    return { ok: false, status: 404, error: "Room not found" };
+  }
+
+  const ownerId = ownerCheck.rows[0].owner_id;
+  if (String(ownerId) !== String(userId)) {
+    return { ok: false, status: 403, error: "Only room owner can do this" };
+  }
+
+  return { ok: true };
+}
+
+async function validateInvite(pool, roomId, token) {
+  if (!token) return null;
+
+  const res = await pool.query(
+    `
+    SELECT *
+    FROM room_invites
+    WHERE room_id = $1
+      AND token = $2
+      AND revoked = FALSE
+      AND redeemed_at IS NULL 
+      AND (expires_at IS NULL OR expires_at > NOW())
+    LIMIT 1
+    `,
+    [roomId, token]
+  );
+
+  return res.rowCount ? res.rows[0] : null;
+}
+
+
+
+
+//Endpoints
 function createRoomRoutes(pool) {
   // Get user's rooms (owned and visited)
   router.get("/my-rooms", verifyToken, async (req, res) => {
@@ -108,6 +159,8 @@ function createRoomRoutes(pool) {
     try {
       const { roomId } = req.params;
 
+      const inviteToken = req.body?.inviteToken || req.query?.invite || null;
+
       // Check if room exists
       const roomCheck = await pool.query(
         "SELECT lang, owner_id FROM room_settings WHERE room_id = $1",
@@ -122,7 +175,7 @@ function createRoomRoutes(pool) {
       const ownerId = roomCheck.rows[0].owner_id;
       const isOwner = String(ownerId) === String(req.user.id);
 
-      // NEW: Check if owner is online (for non-owners)
+      // NEW: Check if owner is online (for non-owners WITHOUT valid invite)
       if (!isOwner && ownerId) {
         const ownerOnline = isUserConnectedToRoom(roomId, ownerId);
         if (!ownerOnline) {
@@ -131,6 +184,28 @@ function createRoomRoutes(pool) {
           });
         }
       }
+      // Validate invite token first (allows joining even if owner offline)
+      let inviteValid = false;
+
+      if (!isOwner && inviteToken) {
+        const redeem = await pool.query(
+          `
+          UPDATE room_invites
+          SET redeemed_by = $1,
+              redeemed_at = NOW()
+          WHERE room_id = $2
+            AND token = $3
+            AND revoked = FALSE
+            AND redeemed_at IS NULL
+            AND (expires_at IS NULL OR expires_at > NOW())
+          RETURNING token
+          `,
+          [String(req.user.id), roomId, String(inviteToken)]
+        );
+
+        inviteValid = redeem.rowCount > 0;
+      }
+
 
       // Check if user already has this room in their list
       const existingEntry = await pool.query(
@@ -138,10 +213,11 @@ function createRoomRoutes(pool) {
         [req.user.id, roomId]
       );
 
-      let existingIsOwner = false;
+      // This ensures consistency between database and API response
+      let userIsOwner = isOwner;
       if (existingEntry.rows.length > 0) {
-        // Preserve existing is_owner status
-        existingIsOwner = existingEntry.rows[0].is_owner;
+        // If user already in room, preserve their existing ownership status
+        userIsOwner = existingEntry.rows[0].is_owner;
       }
 
       // Insert or update user_rooms
@@ -151,7 +227,7 @@ function createRoomRoutes(pool) {
         ON CONFLICT (user_id, room_id) DO UPDATE
         SET last_visited_at = NOW()
         RETURNING *`,
-        [req.user.id, roomId, existingIsOwner]
+        [req.user.id, roomId, userIsOwner]
       );
 
       res.json({
@@ -270,6 +346,133 @@ function createRoomRoutes(pool) {
       res.status(500).json({ error: "Failed to delete room" });
     }
   });
+
+  router.post("/:roomId/invites", verifyToken, async (req, res) => {
+    try {
+      const { roomId } = req.params;
+      const { expiresInMinutes, singleUse = true } = req.body || {};
+
+      const owner = await assertOwner(pool, roomId, req.user.id);
+      if (!owner.ok) return res.status(owner.status).json({ error: owner.error });
+
+      const token = makeInviteToken();
+
+      const expiresAt =
+        typeof expiresInMinutes === "number" && expiresInMinutes > 0
+          ? new Date(Date.now() + expiresInMinutes * 60 * 1000)
+          : null;
+
+      await pool.query(
+        `
+        INSERT INTO room_invites (room_id, token, created_by, expires_at, revoked)
+        VALUES ($1, $2, $3, $4, FALSE)
+        `,
+        [roomId, token, String(req.user.id), expiresAt]
+      );
+
+      // You can build a full URL on frontend; here we return the path.
+      const inviteUrl = `/room/${roomId}?invite=${token}`;
+
+      res.status(201).json({
+        invite: {
+          roomId,
+          token,
+          inviteUrl,
+          expiresAt,
+          // singleUse is enforced in join route below (see comment)
+          singleUse: !!singleUse,
+        },
+      });
+    } catch (error) {
+      console.error("Error creating invite:", error);
+      res.status(500).json({ error: error.message || "Failed to create invite" });
+    }
+  });
+
+  router.get("/:roomId/invites", verifyToken, async (req, res) => {
+    try {
+      const { roomId } = req.params;
+
+      const owner = await assertOwner(pool, roomId, req.user.id);
+      if (!owner.ok) return res.status(owner.status).json({ error: owner.error });
+
+      const result = await pool.query(
+        `
+        SELECT id, room_id, token, created_by, expires_at, revoked, created_at, redeemed_by, redeemed_at
+        FROM room_invites
+        WHERE room_id = $1
+        ORDER BY created_at DESC
+        `,
+        [roomId]
+      );
+
+      res.json({ invites: result.rows });
+    } catch (error) {
+      console.error("Error listing invites:", error);
+      res.status(500).json({ error: error.message || "Failed to list invites" });
+    }
+  });
+
+  router.post("/invites/:token/revoke", verifyToken, async (req, res) => {
+    try {
+      const { token } = req.params;
+
+      // Need roomId to check owner, so fetch invite first
+      const inv = await pool.query(
+        "SELECT room_id FROM room_invites WHERE token = $1",
+        [token]
+      );
+
+      if (inv.rows.length === 0) {
+        return res.status(404).json({ error: "Invite not found" });
+      }
+
+      const roomId = inv.rows[0].room_id;
+
+      const owner = await assertOwner(pool, roomId, req.user.id);
+      if (!owner.ok) return res.status(owner.status).json({ error: owner.error });
+
+      await pool.query(
+        "UPDATE room_invites SET revoked = TRUE WHERE token = $1",
+        [token]
+      );
+
+      res.json({ message: "Invite revoked" });
+    } catch (error) {
+      console.error("Error revoking invite:", error);
+      res.status(500).json({ error: error.message || "Failed to revoke invite" });
+    }
+  });
+
+  router.get("/invites/validate", async (req, res) => {
+    try {
+      const { roomId, token } = req.query;
+
+      if (!roomId || !token) {
+        return res.status(400).json({ valid: false, error: "roomId and token are required" });
+      }
+
+      const invite = await validateInvite(pool, String(roomId), String(token));
+      if (!invite) return res.json({ valid: false });
+
+      res.json({
+        valid: true,
+        invite: {
+          roomId: invite.room_id,
+          expiresAt: invite.expires_at,
+          revoked: invite.revoked,
+          redeemedAt: invite.redeemed_at,
+        },
+      });
+    } catch (error) {
+      console.error("Error validating invite:", error);
+      res.status(500).json({ valid: false, error: "Failed to validate invite" });
+    }
+  });
+
+
+
+
 
   return router;
 }
