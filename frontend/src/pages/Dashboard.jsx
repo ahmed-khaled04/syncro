@@ -278,28 +278,30 @@ export default function Dashboard() {
       </header>
 
       {/* Fixed Notifications - positioned at original location */}
-      <div className="fixed left-0 right-0 z-50 pointer-events-none" style={{ top: '108px' }}>
+      <div
+        className="fixed left-0 right-0 z-50 pointer-events-none pb-32"
+        style={{ top: "110px" }}
+      >
         <div className="mx-auto max-w-7xl px-6 pt-0">
           {error && (
-            <div className="mb-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 animate-slide-in shadow-lg pointer-events-auto">
+            <div className="mb-4 p-4 rounded-lg bg-red-500/30 border border-red-500/50 text-red-300 backdrop-blur-sm animate-slide-in shadow-xl pointer-events-auto">
               {error}
             </div>
           )}
 
           {successMessage && (
-            <div className="mb-4 p-4 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 animate-slide-in shadow-lg pointer-events-auto">
+            <div className="mb-4 p-4 rounded-lg bg-green-500/30 border border-green-500/50 text-green-300 backdrop-blur-sm animate-slide-in shadow-xl pointer-events-auto">
               {successMessage}
             </div>
           )}
         </div>
       </div>
-
       {/* Main Content */}
       <main className="relative mx-auto max-w-7xl px-6 py-12">
         {/* Messages - Removed (moved to fixed position at top) */}
 
         {/* Action Buttons */}
-        <div className="mb-12 flex gap-4">
+        <div className="mt-8 mb-12 flex gap-4">
           <button
             onClick={() => {
               setCreateRoomModalOpen(true);
