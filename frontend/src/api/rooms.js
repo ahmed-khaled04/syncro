@@ -43,20 +43,24 @@ export const roomsAPI = {
     return data.room;
   },
 
-  async joinRoom(roomId , inviteToken) {
+  async joinRoom(roomId, inviteToken) {
     const token = this.getToken();
+
     const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: JSON.stringify(inviteToken ? {inviteToken}: {}),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(inviteToken ? { inviteToken } : {}),
     });
 
+    const data = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || "Failed to join room");
+      throw new Error(data.error || "Failed to join room");
     }
 
-    const data = await response.json();
     return data.room;
   },
 

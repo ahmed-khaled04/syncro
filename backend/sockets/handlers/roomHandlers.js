@@ -35,6 +35,7 @@ const {
   removeUserFromRoom,
 } = require("../../rooms/roomConnections");
 
+
 function isOwner(socket, roomId) {
   const ownerId = getRoomOwner(roomId);
   const userId = socket.data.userId;
@@ -368,19 +369,26 @@ function registerRoomHandlers(io, socket) {
   });
 
   socket.on("disconnecting", () => {
-    // ✅ Remove user from room connections tracking
-    if (socket.data.userId && socket.data.roomId) {
-      removeUserFromRoom(socket.data.roomId, socket.data.userId);
+    const userId = socket.data.userId;
+
+    if (userId) {
+      for (const rid of socket.rooms) {
+        if (rid === socket.id) continue; // skip private socket room
+        removeUserFromRoom(rid, userId);
+      }
     }
 
-    for (const roomId of socket.rooms) {
-      if (roomId === socket.id) continue;
-      // schedule cleanup if room empties
-      const room = io.sockets.adapter.rooms.get(roomId);
+    for (const rid of socket.rooms) {
+      if (rid === socket.id) continue;
+
+      const room = io.sockets.adapter.rooms.get(rid);
       const size = room ? room.size : 0;
-      if (size <= 1) scheduleRoomCleanup(roomId);
+
+      // after this socket leaves, if it becomes empty -> schedule cleanup
+      if (size <= 1) scheduleRoomCleanup(rid);
     }
   });
+
 }
 
 module.exports = { registerRoomHandlers };

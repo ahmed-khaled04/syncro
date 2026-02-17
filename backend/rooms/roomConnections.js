@@ -1,4 +1,6 @@
 // Track which users are connected to each room
+console.log("🧠 roomConnections loaded from:", __filename, "pid:", process.pid);
+
 const roomConnections = new Map(); // Map<string, Set<string>>
 
 const norm = (v) => (v === null || v === undefined ? "" : String(v));
@@ -48,9 +50,18 @@ function getConnectedUsers(roomId) {
   return roomConnections.has(roomId) ? Array.from(roomConnections.get(roomId)) : [];
 }
 
+function debugDump() {
+  const out = {};
+  for (const [rid, set] of roomConnections.entries()) {
+    out[rid] = Array.from(set);
+  }
+  return out;
+}
+
 module.exports = {
   addUserToRoom,
   removeUserFromRoom,
   isUserConnectedToRoom,
   getConnectedUsers,
+  debugDump,
 };

@@ -1,5 +1,6 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
+
 const {
   isUserConnectedToRoom,
   getConnectedUsers,
@@ -61,7 +62,7 @@ async function validateInvite(pool, roomId, token) {
     WHERE room_id = $1
       AND token = $2
       AND revoked = FALSE
-      AND redeemed_at IS NULL 
+      AND redeemed_at IS NULL
       AND (expires_at IS NULL OR expires_at > NOW())
     LIMIT 1
     `,
@@ -70,7 +71,6 @@ async function validateInvite(pool, roomId, token) {
 
   return res.rowCount ? res.rows[0] : null;
 }
-
 
 
 
@@ -154,19 +154,30 @@ function createRoomRoutes(pool) {
     }
   });
 
-  // Join existing room
+
   router.post("/:roomId/join", verifyToken, async (req, res) => {
+    console.log("========== JOIN ROOM ==========");
+    console.log("time:", new Date().toISOString());
+    console.log("roomId param:", req.params.roomId);
+    console.log("user:", req.user);
+    console.log("headers.content-type:", req.headers["content-type"]);
+    console.log("raw query:", req.query);
+    console.log("raw body:", req.body);
+    console.log("body.inviteToken:", req.body?.inviteToken);
+    console.log("query.invite:", req.query?.invite);
+    console.log("================================");
+    const client = await pool.connect();
     try {
       const { roomId } = req.params;
 
-      const inviteToken = req.body?.inviteToken || req.query?.invite || null;
+      const inviteTokenRaw = req.body?.inviteToken || req.query?.invite || null;
+      const inviteToken = inviteTokenRaw ? String(inviteTokenRaw) : null;
 
-      // Check if room exists
-      const roomCheck = await pool.query(
+      // 1) room exists?
+      const roomCheck = await client.query(
         "SELECT lang, owner_id FROM room_settings WHERE room_id = $1",
         [roomId]
       );
-
       if (roomCheck.rows.length === 0) {
         return res.status(404).json({ error: "Room not found" });
       }
@@ -175,62 +186,90 @@ function createRoomRoutes(pool) {
       const ownerId = roomCheck.rows[0].owner_id;
       const isOwner = String(ownerId) === String(req.user.id);
 
-      // NEW: Check if owner is online (for non-owners WITHOUT valid invite)
-      if (!isOwner && ownerId) {
-        const ownerOnline = isUserConnectedToRoom(roomId, ownerId);
-        if (!ownerOnline) {
-          return res.status(403).json({
-            error: "Room owner is not online. You can only join when the owner is inside the room.",
-          });
-        }
-      }
-      // Validate invite token first (allows joining even if owner offline)
-      let inviteValid = false;
-
-      if (!isOwner && inviteToken) {
-        const redeem = await pool.query(
-          `
-          UPDATE room_invites
-          SET redeemed_by = $1,
-              redeemed_at = NOW()
-          WHERE room_id = $2
-            AND token = $3
-            AND revoked = FALSE
-            AND redeemed_at IS NULL
-            AND (expires_at IS NULL OR expires_at > NOW())
-          RETURNING token
-          `,
-          [String(req.user.id), roomId, String(inviteToken)]
-        );
-
-        inviteValid = redeem.rowCount > 0;
-      }
-
-
-      // Check if user already has this room in their list
-      const existingEntry = await pool.query(
+      // 2) membership check
+      const existingEntry = await client.query(
         `SELECT is_owner FROM user_rooms WHERE user_id = $1 AND room_id = $2`,
         [req.user.id, roomId]
       );
+      const alreadyMember = existingEntry.rows.length > 0;
 
-      // This ensures consistency between database and API response
-      let userIsOwner = isOwner;
-      if (existingEntry.rows.length > 0) {
-        // If user already in room, preserve their existing ownership status
-        userIsOwner = existingEntry.rows[0].is_owner;
+      // 3) OWNER: always allow
+      if (!isOwner) {
+        // 4) For ANY non-owner: owner must be online (always)
+        const norm = (v) => (v === null || v === undefined ? "" : String(v));
+
+        const ownerOnline = ownerId
+          ? isUserConnectedToRoom(norm(roomId), norm(ownerId))
+          : false;
+        
+        console.log("JOIN owner check:", {
+          roomId: norm(roomId),
+          ownerId: norm(ownerId),
+          ownerOnline,
+          connectedUsers: getConnectedUsers(norm(roomId)),
+        });
+
+
+        if (!ownerOnline) {
+          return res.status(403).json({
+            error:
+              "Room owner is not online. You can only join when the owner is inside the room.",
+          });
+        }
+
+        // 5) If NOT already a member: invite is required + must be valid and single-use
+        if (!alreadyMember) {
+          if (!inviteToken) {
+            return res
+              .status(401)
+              .json({ error: "Invite token is required to join this room." });
+          }
+
+          await client.query("BEGIN");
+
+          // Redeem invite atomically: also enforces expiry, revoked, and single-use
+          const redeem = await client.query(
+            `
+            UPDATE room_invites
+            SET redeemed_by = $1,
+                redeemed_at = NOW()
+            WHERE room_id = $2
+              AND token = $3
+              AND revoked = FALSE
+              AND redeemed_at IS NULL
+              AND (expires_at IS NULL OR expires_at > NOW())
+            RETURNING token
+            `,
+            [String(req.user.id), roomId, inviteToken]
+          );
+
+          if (redeem.rowCount === 0) {
+            await client.query("ROLLBACK");
+            return res.status(410).json({
+              error: "Invite expired / invalid / already used or revoked",
+            });
+          }
+
+          await client.query("COMMIT");
+        }
+        // 6) If alreadyMember: no invite needed (but owner online is still required, already enforced)
       }
 
-      // Insert or update user_rooms
-      const result = await pool.query(
-        `INSERT INTO user_rooms (user_id, room_id, is_owner, last_visited_at)
+      // 7) Upsert membership / last_visited
+      const userIsOwner = alreadyMember ? existingEntry.rows[0].is_owner : isOwner;
+
+      const result = await client.query(
+        `
+        INSERT INTO user_rooms (user_id, room_id, is_owner, last_visited_at)
         VALUES ($1, $2, $3, NOW())
         ON CONFLICT (user_id, room_id) DO UPDATE
         SET last_visited_at = NOW()
-        RETURNING *`,
+        RETURNING *
+        `,
         [req.user.id, roomId, userIsOwner]
       );
 
-      res.json({
+      return res.json({
         room: {
           room_id: roomId,
           is_owner: result.rows[0].is_owner,
@@ -239,8 +278,13 @@ function createRoomRoutes(pool) {
         },
       });
     } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {}
       console.error("Error joining room:", error);
-      res.status(500).json({ error: error.message || "Failed to join room" });
+      return res.status(500).json({ error: error.message || "Failed to join room" });
+    } finally {
+      client.release();
     }
   });
 
@@ -478,3 +522,4 @@ function createRoomRoutes(pool) {
 }
 
 module.exports = createRoomRoutes;
+
