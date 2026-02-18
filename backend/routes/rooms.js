@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const {
   isUserConnectedToRoom,
   getConnectedUsers,
+  debugDump,
 } = require("../rooms/roomConnections");
 
 const crypto = require("crypto");
@@ -514,8 +515,12 @@ function createRoomRoutes(pool) {
     }
   });
 
-
-
+  // DEBUG: Check current state of room connections
+  router.get("/debug/connections", (req, res) => {
+    const state = debugDump();
+    console.log("🔍 DEBUG: Current room connections state:", state);
+    res.json(state);
+  });
 
 
   return router;

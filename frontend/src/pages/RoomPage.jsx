@@ -1067,17 +1067,45 @@ export default function RoomPage() {
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4">
                   <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                     <div className="flex-1">
-                      <label className="block text-xs text-zinc-400 mb-1">Expiry (minutes)</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={inviteExpiry}
-                        onChange={(e) => setInviteExpiry(Number(e.target.value))}
-                        className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-indigo-500"
-                        placeholder="60"
-                      />
-                      <div className="text-[11px] text-zinc-500 mt-1">
-                        Use <span className="font-mono">0</span> for no expiry.
+                      <label className="block text-xs font-semibold text-zinc-300 mb-2">Expiry Time</label>
+                      <div className="flex items-center gap-2">
+                        {/* Number spinner with up/down controls */}
+                        <div className="flex-1 relative">
+                          <input
+                            type="number"
+                            min={0}
+                            value={inviteExpiry}
+                            onChange={(e) => setInviteExpiry(Math.max(0, Number(e.target.value)))}
+                            className="w-full px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-700 text-zinc-100 focus:outline-none focus:border-indigo-500 font-medium text-lg text-center"
+                            placeholder="60"
+                          />
+                          {/* Up/Down buttons */}
+                          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setInviteExpiry(inviteExpiry + 1)}
+                              className="h-4 w-4 flex items-center justify-center text-zinc-400 hover:text-indigo-400 transition-colors"
+                              title="Increase"
+                            >
+                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L10 5.414l-5.293 5.293a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInviteExpiry(Math.max(0, inviteExpiry - 1))}
+                              className="h-4 w-4 flex items-center justify-center text-zinc-400 hover:text-indigo-400 transition-colors"
+                              title="Decrease"
+                            >
+                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L10 14.586l5.293-5.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-zinc-500 mt-2">
+                        {inviteExpiry === 0 ? "Never expires" : `Expires in ${inviteExpiry} minutes`}
                       </div>
                     </div>
 
@@ -1085,7 +1113,7 @@ export default function RoomPage() {
                       type="button"
                       onClick={handleGenerateInvite}
                       disabled={inviteLoading}
-                      className="px-4 py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50"
+                      className="px-4 py-3 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50 font-medium transition-all whitespace-nowrap"
                     >
                       {inviteLoading ? "Creating..." : "Generate Invite"}
                     </button>
@@ -1144,19 +1172,25 @@ export default function RoomPage() {
                           else if (used) status = "Used";
 
                           return (
-                            <div key={inv.id || inv.token} className="p-4">
+                            <div key={inv.id || inv.token} className="p-4 hover:bg-zinc-800/20 transition-colors">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-mono text-zinc-200 truncate">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-mono text-zinc-200 truncate bg-zinc-800/40 px-2 py-1 rounded-lg">
                                       {inv.token}
                                     </span>
-                                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-300">
+                                    <span className={`text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors ${
+                                      revoked 
+                                        ? "bg-red-500/10 border-red-500/30 text-red-300"
+                                        : used
+                                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                                        : "bg-blue-500/10 border-blue-500/30 text-blue-300"
+                                    }`}>
                                       {status}
                                     </span>
                                   </div>
 
-                                  <div className="mt-2 flex gap-2">
+                                  <div className="mt-2 flex gap-2 items-center">
                                     <input
                                       readOnly
                                       value={link}
@@ -1165,15 +1199,54 @@ export default function RoomPage() {
                                     <button
                                       type="button"
                                       onClick={() => handleCopy(link)}
-                                      className="px-3 py-2 rounded-xl bg-zinc-800/40 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-200"
+                                      className="px-3 py-2 rounded-xl bg-zinc-800/40 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-200 transition-colors"
                                     >
                                       Copy
                                     </button>
                                   </div>
 
-                                  <div className="mt-2 text-[11px] text-zinc-500">
-                                    {inv.expires_at ? `Expires: ${new Date(inv.expires_at).toLocaleString()}` : "No expiry"}
-                                    {used && inv.redeemed_at ? ` • Redeemed: ${new Date(inv.redeemed_at).toLocaleString()}` : ""}
+                                  <div className="mt-3 space-y-1">
+                                    {/* Status badge with color coding */}
+                                    <div className="flex items-center justify-between">
+                                      <div className="text-[11px] text-zinc-500">
+                                        {inv.expires_at ? (
+                                          (() => {
+                                            const expiresDate = new Date(inv.expires_at);
+                                            const now = new Date();
+                                            const timeLeftMs = expiresDate.getTime() - now.getTime();
+                                            const timeLeftMins = Math.floor(timeLeftMs / (1000 * 60));
+                                            const isExpired = timeLeftMs <= 0;
+                                            const expiresSoon = timeLeftMs > 0 && timeLeftMs <= 3600000; // 1 hour
+                                            
+                                            return (
+                                              <span className="flex items-center gap-2">
+                                                <span className={isExpired ? "text-red-300" : "text-zinc-400"}>
+                                                  {expiresDate.toLocaleString()}
+                                                </span>
+                                                {isExpired ? (
+                                                  <span className="inline-block px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 text-red-200 text-[10px] font-medium">
+                                                    🔴 Expired
+                                                  </span>
+                                                ) : expiresSoon ? (
+                                                  <span className="inline-block px-2 py-1 rounded-lg bg-orange-500/10 border border-orange-500/25 text-orange-200 text-[10px] font-medium">
+                                                    ⚠️ {timeLeftMins}m left
+                                                  </span>
+                                                ) : null}
+                                              </span>
+                                            );
+                                          })()
+                                        ) : (
+                                          <span className="text-emerald-300">♾ No expiry</span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Redemption status */}
+                                    {used && inv.redeemed_at && (
+                                      <div className="text-[11px] text-zinc-500">
+                                        ✓ Redeemed {new Date(inv.redeemed_at).toLocaleString()}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
 

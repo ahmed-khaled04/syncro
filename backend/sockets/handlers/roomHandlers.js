@@ -55,6 +55,8 @@ function canEdit(socket, roomId) {
 }
 
 function registerRoomHandlers(io, socket) {
+  console.log(`🔌 Registering handlers for socket: ${socket.id}`);
+
   socket.on("join-room", async ({ roomId, name, userId }) => {
     socket.join(roomId);
     socket.to(roomId).emit("awareness-resync");
@@ -105,6 +107,17 @@ function registerRoomHandlers(io, socket) {
     socket.emit("y-sync", { update: Array.from(full) });
 
     io.to(roomId).emit("system", `${name || "Someone"} joined ${roomId}`);
+  });
+
+  socket.on("leave-room", ({ roomId, userId }) => {
+    console.log(`\n🚪 LEAVE-ROOM event: roomId=${roomId}, userId=${userId}`);
+    
+    if (userId) {
+      removeUserFromRoom(roomId, userId);
+    }
+
+    socket.leave(roomId);
+    io.to(roomId).emit("system", `${userId || "Someone"} left ${roomId}`);
   });
 
   socket.on("set-room-language", ({ roomId, lang }) => {
@@ -368,26 +381,46 @@ function registerRoomHandlers(io, socket) {
     }
   });
 
-  socket.on("disconnecting", () => {
+  // Handle disconnect - use both "disconnecting" and "disconnect" for reliability
+  const handleDisconnect = () => {
     const userId = socket.data.userId;
+    const roomId = socket.data.roomId;
 
+    console.log(`\n🔌🔌🔌 DISCONNECT EVENT FIRED 🔌🔌🔌`);
+    console.log(`   userId=${userId}, roomId=${roomId}`);
+    console.log(`   socket.rooms: ${Array.from(socket.rooms).join(", ")}`);
+
+    if (userId && roomId) {
+      // Explicitly remove from the main room
+      console.log(`   ❌ Removing user ${userId} from room ${roomId}`);
+      removeUserFromRoom(roomId, userId);
+    }
+
+    // Also clean up any other rooms this socket was in
     if (userId) {
       for (const rid of socket.rooms) {
-        if (rid === socket.id) continue; // skip private socket room
+        if (rid === socket.id || rid === roomId) continue;
+        console.log(`   ❌ Also removing user ${userId} from room ${rid}`);
         removeUserFromRoom(rid, userId);
       }
     }
 
+    // Schedule cleanup for empty rooms
     for (const rid of socket.rooms) {
       if (rid === socket.id) continue;
 
       const room = io.sockets.adapter.rooms.get(rid);
       const size = room ? room.size : 0;
 
-      // after this socket leaves, if it becomes empty -> schedule cleanup
-      if (size <= 1) scheduleRoomCleanup(rid);
+      if (size <= 1) {
+        console.log(`   ⏰ Scheduling cleanup for room ${rid} (${size} sockets left)`);
+        scheduleRoomCleanup(rid);
+      }
     }
-  });
+  };
+
+  socket.on("disconnecting", handleDisconnect);
+  socket.on("disconnect", handleDisconnect);
 
 }
 

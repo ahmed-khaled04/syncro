@@ -151,11 +151,16 @@ export function useYjsSync(socket, roomId, name) {
     if (socket.connected) joinNow();
 
     return () => {
+      console.log(`🔌 Cleaning up useYjsSync for roomId=${roomId}`);
       socket.off("y-sync", handleSync);
       socket.off("y-update", handleRemoteUpdate);
       socket.off("awareness-update", handleAwarenessMessage);
       socket.off("awareness-resync", handleAwarenessResync);
       socket.off("connect", joinNow);
+      
+      // ✅ Tell backend we're leaving the room
+      console.log(`📤 Emitting leave-room for roomId=${roomId}`);
+      socket.emit("leave-room", { roomId, userId: userIdRef.current });
     };
   }, [ready, socket, roomId, name, ydoc, awareness]);
 
