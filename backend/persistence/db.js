@@ -74,6 +74,12 @@ async function initDb(pool) {
     ADD COLUMN IF NOT EXISTS description TEXT DEFAULT NULL;
   `);
 
+  // Migration: Add is_public column if it doesn't exist (default TRUE for backwards compatibility)
+  await pool.query(`
+    ALTER TABLE public.room_settings
+    ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT TRUE;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.room_snapshots (
       room_id TEXT PRIMARY KEY,

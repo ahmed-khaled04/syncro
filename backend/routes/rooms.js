@@ -92,6 +92,7 @@ function createRoomRoutes(pool) {
           rs.description,
           rs.lang,
           rs.owner_id,
+          rs.is_public,
           u.name as owner_name
         FROM user_rooms ur
         LEFT JOIN room_settings rs ON ur.room_id = rs.room_id
@@ -176,7 +177,7 @@ function createRoomRoutes(pool) {
 
       // 1) room exists?
       const roomCheck = await client.query(
-        "SELECT lang, owner_id FROM room_settings WHERE room_id = $1",
+        "SELECT lang, owner_id, is_public FROM room_settings WHERE room_id = $1",
         [roomId]
       );
       if (roomCheck.rows.length === 0) {
@@ -185,6 +186,7 @@ function createRoomRoutes(pool) {
 
       const roomLang = roomCheck.rows[0].lang;
       const ownerId = roomCheck.rows[0].owner_id;
+      const isPublic = roomCheck.rows[0].is_public;
       const isOwner = String(ownerId) === String(req.user.id);
 
       // 2) membership check
@@ -196,9 +198,9 @@ function createRoomRoutes(pool) {
 
       // 3) OWNER: always allow
       if (!isOwner) {
-        // 4) For ANY non-owner: owner must be online (always)
         const norm = (v) => (v === null || v === undefined ? "" : String(v));
 
+        // 4) Check if owner is online (required for all non-owners)
         const ownerOnline = ownerId
           ? isUserConnectedToRoom(norm(roomId), norm(ownerId))
           : false;
@@ -207,9 +209,10 @@ function createRoomRoutes(pool) {
           roomId: norm(roomId),
           ownerId: norm(ownerId),
           ownerOnline,
+          isPublic,
+          inviteProvided: !!inviteToken,
           connectedUsers: getConnectedUsers(norm(roomId)),
         });
-
 
         if (!ownerOnline) {
           return res.status(403).json({
@@ -218,12 +221,14 @@ function createRoomRoutes(pool) {
           });
         }
 
-        // 5) If NOT already a member: invite is required + must be valid and single-use
-        if (!alreadyMember) {
+        // 5) If room is PRIVATE: require invite (always)
+        // If room is PUBLIC: invite is optional (already online check passed)
+        if (!alreadyMember && (inviteToken || !isPublic)) {
+          // invite is provided OR room is private (need to validate/redeem)
           if (!inviteToken) {
             return res
               .status(401)
-              .json({ error: "Invite token is required to join this room." });
+              .json({ error: "Invite token is required to join this private room." });
           }
 
           await client.query("BEGIN");
@@ -325,7 +330,7 @@ function createRoomRoutes(pool) {
   router.put("/:roomId", verifyToken, async (req, res) => {
     try {
       const { roomId } = req.params;
-      const { name, description, lang } = req.body;
+      const { name, description, lang, is_public } = req.body;
 
       // Check if user is owner
       const ownerCheck = await pool.query(
@@ -341,16 +346,46 @@ function createRoomRoutes(pool) {
         return res.status(403).json({ error: "Only room owner can update settings" });
       }
 
-      // Update room settings
-      const updateResult = await pool.query(
-        `UPDATE room_settings 
-        SET name = COALESCE($1, name), 
-            description = $2, 
-            lang = COALESCE($3, lang)
-        WHERE room_id = $4
-        RETURNING room_id, name, description, lang, owner_id`,
-        [name?.trim() || null, description?.trim() || null, lang, roomId]
-      );
+      // Build dynamic update query
+      let updates = [];
+      let values = [];
+      let paramCount = 1;
+
+      if (name !== undefined) {
+        updates.push(`name = $${paramCount}`);
+        values.push(name?.trim() || null);
+        paramCount++;
+      }
+
+      if (description !== undefined) {
+        updates.push(`description = $${paramCount}`);
+        values.push(description?.trim() || null);
+        paramCount++;
+      }
+
+      if (lang !== undefined) {
+        updates.push(`lang = $${paramCount}`);
+        values.push(lang);
+        paramCount++;
+      }
+
+      if (is_public !== undefined) {
+        updates.push(`is_public = $${paramCount}`);
+        values.push(Boolean(is_public));
+        paramCount++;
+      }
+
+      if (updates.length === 0) {
+        return res.json({
+          message: "No changes",
+          room: ownerCheck.rows[0],
+        });
+      }
+
+      values.push(roomId);
+      const updateSQL = `UPDATE room_settings SET ${updates.join(", ")} WHERE room_id = $${paramCount} RETURNING room_id, name, description, lang, owner_id, is_public`;
+
+      const updateResult = await pool.query(updateSQL, values);
 
       res.json({
         message: "Room settings updated",

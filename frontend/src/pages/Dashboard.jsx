@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomDescription, setNewRoomDescription] = useState("");
   const [newRoomLanguage, setNewRoomLanguage] = useState("js");
+  const [newRoomIsPublic, setNewRoomIsPublic] = useState(true);
   const [roomAvailability, setRoomAvailability] = useState(null);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
 
@@ -351,6 +352,7 @@ export default function Dashboard() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="text-xl font-bold text-zinc-100">
+                                {!room.is_public && <span className="text-red-400 mr-1" title="Private room">🔒</span>}
                                 {room.name || "Untitled Room"}
                               </h3>
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
@@ -391,6 +393,7 @@ export default function Dashboard() {
                               setNewRoomName(room.name || "");
                               setNewRoomDescription(room.description || "");
                               setNewRoomLanguage(room.lang || "js");
+                              setNewRoomIsPublic(room.is_public !== false);
                               setSettingsRoomModalOpen(true);
                             }}
                             className="px-3 py-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors text-sm"
@@ -432,6 +435,7 @@ export default function Dashboard() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="text-xl font-bold text-zinc-100">
+                                {!room.is_public && <span className="text-red-400 mr-1" title="Private room">🔒</span>}
                                 {room.name || "Untitled Room"}
                               </h3>
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
@@ -759,6 +763,40 @@ export default function Dashboard() {
                 />
               </div>
 
+              {/* Privacy Setting */}
+              <div>
+                <label className="block text-sm font-semibold text-zinc-300 mb-3">
+                  {newRoomIsPublic ? "🌐 Public Room" : "🔒 Private Room"}
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setNewRoomIsPublic(true)}
+                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${
+                      newRoomIsPublic
+                        ? "bg-blue-500/20 border-blue-500/50 text-blue-100"
+                        : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    🌐 Public
+                  </button>
+                  <button
+                    onClick={() => setNewRoomIsPublic(false)}
+                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${
+                      !newRoomIsPublic
+                        ? "bg-red-500/20 border-red-500/50 text-red-100"
+                        : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    🔒 Private
+                  </button>
+                </div>
+                <p className="text-xs text-zinc-500 mt-2">
+                  {newRoomIsPublic
+                    ? "Anyone can join with owner online (or with invite)"
+                    : "Only people with an invite can join (owner must be online)"}
+                </p>
+              </div>
+
               {/* Delete Room from Settings */}
               <div>
                 <button
@@ -793,6 +831,7 @@ export default function Dashboard() {
                       name: newRoomName,
                       description: newRoomDescription,
                       lang: newRoomLanguage,
+                      is_public: newRoomIsPublic,
                     });
 
                     setSuccessMessage("Room settings updated successfully!");
