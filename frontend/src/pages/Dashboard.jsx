@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { roomsAPI } from "../api/rooms";
+import { friendsAPI } from "../api/friends";
+import FriendsPanel from "../components/FriendsPanel";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -34,6 +36,16 @@ export default function Dashboard() {
   const [updating, setUpdating] = useState(false);
   const [entering, setEntering] = useState(false);
   const [enteringRoomId, setEnteringRoomId] = useState(null);
+
+  // Friends panel
+  const [friendsPanelOpen, setFriendsPanelOpen] = useState(false);
+  const [pendingFriendCount, setPendingFriendCount] = useState(0);
+
+  // Load pending friend request count
+  useEffect(() => {
+    if (!user) return;
+    friendsAPI.getIncoming().then((d) => setPendingFriendCount(d.requests.length)).catch(() => { });
+  }, [user]);
 
   // Load rooms
   useEffect(() => {
@@ -204,7 +216,7 @@ export default function Dashboard() {
     try {
       setError("");
       const availability = await roomsAPI.checkRoomAvailability(roomId);
-      
+
       if (!availability.ownerOnline) {
         setError("❌ Room owner is not online. You can only enter when the owner is inside the room.");
         setEntering(false);
@@ -263,7 +275,18 @@ export default function Dashboard() {
             <p className="text-sm text-zinc-400 mt-1">Collaborative Editor</p>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setFriendsPanelOpen(true)}
+              className="relative px-4 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/20 transition-colors text-sm font-medium flex items-center gap-2"
+            >
+              👥 Friends
+              {pendingFriendCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-indigo-500 text-white text-[10px] flex items-center justify-center font-bold shadow">
+                  {pendingFriendCount}
+                </span>
+              )}
+            </button>
             <div className="text-right">
               <p className="text-sm font-medium text-zinc-300">{user?.name}</p>
               <p className="text-xs text-zinc-500">{user?.email}</p>
@@ -600,11 +623,10 @@ export default function Dashboard() {
               )}
 
               {roomAvailability && !checkingAvailability && (
-                <div className={`p-3 rounded-lg border ${
-                  roomAvailability.ownerOnline
-                    ? "bg-green-500/10 border-green-500/30 text-green-400"
-                    : "bg-red-500/10 border-red-500/30 text-red-400"
-                }`}>
+                <div className={`p-3 rounded-lg border ${roomAvailability.ownerOnline
+                  ? "bg-green-500/10 border-green-500/30 text-green-400"
+                  : "bg-red-500/10 border-red-500/30 text-red-400"
+                  }`}>
                   <div className="flex items-center gap-2 text-sm font-medium">
                     {roomAvailability.ownerOnline ? (
                       <>
@@ -771,21 +793,19 @@ export default function Dashboard() {
                 <div className="flex gap-2">
                   <button
                     onClick={() => setNewRoomIsPublic(true)}
-                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${
-                      newRoomIsPublic
-                        ? "bg-blue-500/20 border-blue-500/50 text-blue-100"
-                        : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
-                    }`}
+                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${newRoomIsPublic
+                      ? "bg-blue-500/20 border-blue-500/50 text-blue-100"
+                      : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
+                      }`}
                   >
                     🌐 Public
                   </button>
                   <button
                     onClick={() => setNewRoomIsPublic(false)}
-                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${
-                      !newRoomIsPublic
-                        ? "bg-red-500/20 border-red-500/50 text-red-100"
-                        : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
-                    }`}
+                    className={`flex-1 px-4 py-3 rounded-lg border font-medium transition-all ${!newRoomIsPublic
+                      ? "bg-red-500/20 border-red-500/50 text-red-100"
+                      : "bg-zinc-800/40 border-zinc-700/50 text-zinc-400 hover:text-zinc-200"
+                      }`}
                   >
                     🔒 Private
                   </button>
@@ -860,6 +880,23 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {/* Friends Panel */}
+      <FriendsPanel
+        isOpen={friendsPanelOpen}
+        onClose={() => setFriendsPanelOpen(false)}
+        pendingCount={pendingFriendCount}
+        onRequestsHandled={() => {
+          // refresh the badge count after accept/decline
+          friendsAPI.getIncoming()
+            .then((d) => setPendingFriendCount(d.requests.length))
+            .catch(() => { });
+        }}
+        onJoinRoom={(roomId) => {
+          setFriendsPanelOpen(false);
+          navigate(`/room/${roomId}`);
+        }}
+      />
+
     </div>
   );
 }

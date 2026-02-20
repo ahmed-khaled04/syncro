@@ -42,7 +42,7 @@ export default function RoomPage() {
     }
   }, []);
 
-    // Invite UI (Owner only)
+  // Invite UI (Owner only)
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteError, setInviteError] = useState("");
@@ -294,7 +294,7 @@ export default function RoomPage() {
       if (rid !== roomId) return;
       setLocked(!!l);
       setOwnerId(oid || null);
-      
+
       // NOTE: youAreOwner is set from API response (location.state) and not overridden here
       // to avoid conflicts between API and socket data
       console.log(`🔍 Socket room-lock: locked=${l}, ownerId=${oid}`);
@@ -321,9 +321,8 @@ export default function RoomPage() {
       if (!payload || payload.roomId !== roomId) return;
 
       setEditRequests((prev) => {
-        const id = `${payload.requester?.id || "unknown"}-${
-          payload.at || Date.now()
-        }`;
+        const id = `${payload.requester?.id || "unknown"}-${payload.at || Date.now()
+          }`;
         if (prev.some((r) => r.id === id)) return prev;
         return [{ id, ...payload }, ...prev].slice(0, 6);
       });
@@ -415,68 +414,97 @@ export default function RoomPage() {
     return new URLSearchParams(location.search).get("invite");
   }, [location.search]);
 
-    useEffect(() => {
-      let cancelled = false;
+  useEffect(() => {
+    let cancelled = false;
 
-      async function doJoin() {
-        // must be logged in (you already redirect if !name, but token matters)
-        const token = roomsAPI.getToken?.() || localStorage.getItem("syncro-token");
-        if (!token) {
-          if (!cancelled) setJoinState({ status: "error", error: "Please log in again." });
-          return;
-        }
-
-        setJoinState({ status: "checking", error: "" });
-
-        try {
-          await roomsAPI.joinRoom(roomId, inviteToken || undefined);
-
-          if (!cancelled) setJoinState({ status: "ok", error: "" });
-
-          if (inviteToken) {
-            const params = new URLSearchParams(location.search);
-            params.delete("invite");
-            navigate(`${location.pathname}${params.toString() ? `?${params}` : ""}`, { replace: true });
-          }
-        } catch (e) {
-          if (!cancelled) setJoinState({ status: "error", error: e.message || "Failed to join room" });
-        }
+    async function doJoin() {
+      // must be logged in (you already redirect if !name, but token matters)
+      const token = roomsAPI.getToken?.() || localStorage.getItem("syncro-token");
+      if (!token) {
+        if (!cancelled) setJoinState({ status: "error", error: "Please log in again." });
+        return;
       }
 
-      if (roomId) doJoin();
+      setJoinState({ status: "checking", error: "" });
 
-      return () => {
-        cancelled = true;
-      };
-    }, [roomId, inviteToken, navigate, location.pathname, location.search]);
+      try {
+        await roomsAPI.joinRoom(roomId, inviteToken || undefined);
 
+        if (!cancelled) setJoinState({ status: "ok", error: "" });
 
-
-
-  
-
-  // Flatten file tree for command palette search
-  const allFiles = useMemo(() => {
-    if (!ready || !ydoc) {
-      return [];
+        if (inviteToken) {
+          const params = new URLSearchParams(location.search);
+          params.delete("invite");
+          navigate(`${location.pathname}${params.toString() ? `?${params}` : ""}`, { replace: true });
+        }
+      } catch (e) {
+        if (!cancelled) setJoinState({ status: "error", error: e.message || "Failed to join room" });
+      }
     }
 
-    // DEBUG: Check what maps exist in ydoc
-    console.log("🔍 DEBUG: Checking ydoc structure...");
-    const allMaps = {};
-    ydoc.share.forEach((value, key) => {
-      allMaps[key] = {
-        type: value.constructor.name,
-        size: value.size !== undefined ? value.size : "N/A"
-      };
-    });
-    console.log("📊 All maps in ydoc:", allMaps);
+if (roomId) doJoin();
 
-    // Only get fs:nodes - that's where file metadata is
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, inviteToken, navigate, location.pathname, location.search]);
+
+  // Notify friends when user joins a room
+  useEffect(() => {
+    if (joinState.status !== "ok" || !roomId) return;
+
+    // Get room info and notify friends
+    const notifyFriends = async () => {
+      try {
+        const roomInfo = await roomsAPI.getMyRooms();
+        const currentRoom = roomInfo.rooms?.find(r => r.room_id === roomId);
+        
+        if (currentRoom) {
+          socket.emit("friend:room-joined", {
+            roomId,
+            roomName: currentRoom.name || "Unnamed Room",
+            isPublic: currentRoom.is_public !== false,
+            ownerId: currentRoom.is_owner ? user?.id : currentRoom.owner_id,
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to notify friends about room join:", e);
+      }
+    };
+
+    notifyFriends();
+
+    // Notify friends when leaving the room
+    const handleBeforeUnload = () => {
+      socket.emit("friend:room-left");
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      // Emit room-left when component unmounts
+      socket.emit("friend:room-left");
+    };
+  }, [joinState.status, roomId, user?.id]);
+
+
+
+
+
+
+  // Flatten file tree for command palette search — kept in sync via observeDeep
+  const [allFiles, setAllFiles] = useState([]);
+
+  useEffect(() => {
+    if (!ydoc) {
+      setAllFiles([]);
+      return;
+    }
+
     const nodesMap = ydoc.getMap("fs:nodes");
-    console.log("📍 fs:nodes size =", nodesMap?.size);
 
-    if (nodesMap && nodesMap.size > 0) {
+    const buildFilesList = () => {
       const filesList = [];
       nodesMap.forEach((nodeValue, nodeId) => {
         const type = nodeValue.get("type");
@@ -490,13 +518,13 @@ export default function RoomPage() {
           });
         }
       });
-      console.log(` Found ${filesList.length} files from fs:nodes`);
-      return filesList;
-    }
+      setAllFiles(filesList);
+    };
 
-    console.log("❌ fs:nodes is empty or not found");
-    return [];
-  }, [ydoc, ready]);
+    buildFilesList();
+    nodesMap.observeDeep(buildFilesList);
+    return () => nodesMap.unobserveDeep(buildFilesList);
+  }, [ydoc]);
 
   const handleCloseTab = (fileId) => {
     const newOpenFiles = openFiles.filter((f) => f.fileId !== fileId);
@@ -567,7 +595,7 @@ export default function RoomPage() {
 
   const handleInputConfirm = () => {
     const value = inputModal.inputValue.trim();
-    
+
     if (!value) {
       setInputModal((prev) => ({ ...prev, error: "Name cannot be empty" }));
       return;
@@ -663,53 +691,53 @@ export default function RoomPage() {
 
   if (!name) return <Navigate to="/" replace />;
 
-    if (joinState.status === "checking") {
-      return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-4">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-700 border-t-indigo-500" />
-            <p className="text-sm text-zinc-400">Joining room…</p>
-            {inviteToken && (
-              <p className="text-xs text-zinc-600 font-mono">
-                Using invite token…
-              </p>
-            )}
-          </div>
+  if (joinState.status === "checking") {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-700 border-t-indigo-500" />
+          <p className="text-sm text-zinc-400">Joining room…</p>
+          {inviteToken && (
+            <p className="text-xs text-zinc-600 font-mono">
+              Using invite token…
+            </p>
+          )}
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
-    if (joinState.status === "error") {
-      return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
-            <div className="text-lg font-semibold">Can’t join room</div>
-            <div className="text-sm text-zinc-400 mt-2">{joinState.error}</div>
+  if (joinState.status === "error") {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
+          <div className="text-lg font-semibold">Can’t join room</div>
+          <div className="text-sm text-zinc-400 mt-2">{joinState.error}</div>
 
-            <div className="mt-5 flex gap-2">
-              <button
-                className="px-4 py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20"
-                onClick={() => window.location.reload()}
-              >
-                Retry
-              </button>
-              <button
-                className="px-4 py-2 rounded-xl bg-zinc-800/40 border border-zinc-700/50 text-zinc-200 hover:bg-zinc-800"
-                onClick={() => navigate("/dashboard")}
-              >
-                Back to dashboard
-              </button>
+          <div className="mt-5 flex gap-2">
+            <button
+              className="px-4 py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/25 text-indigo-100 hover:bg-indigo-500/20"
+              onClick={() => window.location.reload()}
+            >
+              Retry
+            </button>
+            <button
+              className="px-4 py-2 rounded-xl bg-zinc-800/40 border border-zinc-700/50 text-zinc-200 hover:bg-zinc-800"
+              onClick={() => navigate("/dashboard")}
+            >
+              Back to dashboard
+            </button>
+          </div>
+
+          {inviteToken && (
+            <div className="mt-4 text-xs text-zinc-500">
+              If this invite is single-use, it may already be used or revoked.
             </div>
-
-            {inviteToken && (
-              <div className="mt-4 text-xs text-zinc-500">
-                If this invite is single-use, it may already be used or revoked.
-              </div>
-            )}
-          </div>
+          )}
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
 
   return (
@@ -866,9 +894,8 @@ export default function RoomPage() {
         <div className="w-full h-full flex overflow-hidden px-4 sm:px-6 py-5 gap-4">
           {/* Left Sidebar (Files) */}
           <div
-            className={`flex-shrink-0 border border-zinc-800/40 bg-zinc-900/30 backdrop-blur-sm transition-all duration-300 ease-in-out overflow-hidden flex flex-col rounded-2xl ${
-              sidebarOpen ? "" : "w-0 border-transparent"
-            }`}
+            className={`flex-shrink-0 border border-zinc-800/40 bg-zinc-900/30 backdrop-blur-sm transition-all duration-300 ease-in-out overflow-hidden flex flex-col rounded-2xl ${sidebarOpen ? "" : "w-0 border-transparent"
+              }`}
             style={sidebarOpen ? { width: `${leftWidth}px`, minWidth: `${leftWidth}px` } : { width: 0, minWidth: 0 }}
           >
             <div className="p-5 border-b border-zinc-800/40">
@@ -1179,13 +1206,12 @@ export default function RoomPage() {
                                     <span className="text-xs font-mono text-zinc-200 truncate bg-zinc-800/40 px-2 py-1 rounded-lg">
                                       {inv.token}
                                     </span>
-                                    <span className={`text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors ${
-                                      revoked 
+                                    <span className={`text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors ${revoked
                                         ? "bg-red-500/10 border-red-500/30 text-red-300"
                                         : used
-                                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                                        : "bg-blue-500/10 border-blue-500/30 text-blue-300"
-                                    }`}>
+                                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                                          : "bg-blue-500/10 border-blue-500/30 text-blue-300"
+                                      }`}>
                                       {status}
                                     </span>
                                   </div>
@@ -1217,7 +1243,7 @@ export default function RoomPage() {
                                             const timeLeftMins = Math.floor(timeLeftMs / (1000 * 60));
                                             const isExpired = timeLeftMs <= 0;
                                             const expiresSoon = timeLeftMs > 0 && timeLeftMs <= 3600000; // 1 hour
-                                            
+
                                             return (
                                               <span className="flex items-center gap-2">
                                                 <span className={isExpired ? "text-red-300" : "text-zinc-400"}>

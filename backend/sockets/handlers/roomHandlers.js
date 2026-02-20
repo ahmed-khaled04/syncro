@@ -28,12 +28,18 @@ const {
   moveNode,
   deleteNodeRecursive,
   ensureFsDefaults,
-} = require("../../rooms/ydocStore");
+} = require("../../rooms/ydocStore.js");
 
 const {
   addUserToRoom,
   removeUserFromRoom,
-} = require("../../rooms/roomConnections");
+} = require("../../rooms/roomConnections.js");
+
+
+const {
+  setUserCurrentRoom,
+  notifyFriendsAboutRoom,
+} = require("./friendsHandlers.js");
 
 
 function isOwner(socket, roomId) {
@@ -54,30 +60,65 @@ function canEdit(socket, roomId) {
   return !!(owner || allowed);
 }
 
-function registerRoomHandlers(io, socket) {
+function registerRoomHandlers(io, socket , pool) {
   console.log(`🔌 Registering handlers for socket: ${socket.id}`);
 
-  socket.on("join-room", async ({ roomId, name, userId }) => {
+  socket.on("join-room", async ({ roomId, name }) => {
     socket.join(roomId);
     socket.to(roomId).emit("awareness-resync");
     cancelRoomCleanup(roomId);
 
-    socket.data.userId = userId || null;
+    const userId = socket.data.userId;
+    if (!userId) {
+      console.warn("❌ join-room blocked: unauthenticated socket");
+      return;
+    }
     socket.data.name = name || null;
     socket.data.roomId = roomId; // Track which room user is in
 
     console.log(`✅ User joined room: userId=${userId}, roomId=${roomId}, name=${name}`);
 
-    // ✅ Track user connection to room
     if (userId) {
       addUserToRoom(roomId, userId);
     }
 
-    // ✅ NEW: load persisted room settings into memory cache
+    // load persisted room settings into memory cache
     await hydrateRoom(roomId);
 
     // ensure owner after hydrate (so DB owner is respected)
-    const ownerId = ensureRoomOwner(roomId, userId);
+    const ownerId = String(ensureRoomOwner(roomId, userId));
+    let roomName = roomId;
+    let isPublic = true;
+    try {
+      const { rows } = await pool.query(
+        `
+        SELECT name,
+              COALESCE(is_public, true) AS is_public,
+              owner_id
+        FROM public.room_settings
+        WHERE room_id = $1
+        LIMIT 1
+        `,
+        [roomId]
+      );
+      if (rows[0]) {
+        roomName = rows[0].name || roomName;
+        isPublic = Boolean(rows[0].is_public);
+        ownerId = String(rows[0].owner_id || ownerId);
+      }
+    } catch (e){
+      console.warn("room_settings lookup failed:", e.message);
+    }
+
+    const roomInfo = {
+      roomId,
+      roomName,
+      isPublic,
+      ownerId,
+    };
+
+    setUserCurrentRoom(userId , roomInfo);
+    notifyFriendsAboutRoom(io , pool , userId , roomInfo);
 
     // owner private room (for edit requests)
     if (ownerId && userId && ownerId === userId) {
@@ -109,11 +150,14 @@ function registerRoomHandlers(io, socket) {
     io.to(roomId).emit("system", `${name || "Someone"} joined ${roomId}`);
   });
 
-  socket.on("leave-room", ({ roomId, userId }) => {
+  socket.on("leave-room", ({ roomId }) => {
+    const userId = socket.data.userId;
     console.log(`\n🚪 LEAVE-ROOM event: roomId=${roomId}, userId=${userId}`);
     
     if (userId) {
       removeUserFromRoom(roomId, userId);
+      setUserCurrentRoom(userId, null);
+      notifyFriendsAboutRoom(io, pool, userId, null);
     }
 
     socket.leave(roomId);
@@ -394,6 +438,11 @@ function registerRoomHandlers(io, socket) {
       // Explicitly remove from the main room
       console.log(`   ❌ Removing user ${userId} from room ${roomId}`);
       removeUserFromRoom(roomId, userId);
+    }
+
+    if (userId) {
+      setUserCurrentRoom(userId, null);
+      notifyFriendsAboutRoom(io, pool, userId, null);
     }
 
     // Also clean up any other rooms this socket was in

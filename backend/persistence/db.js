@@ -134,10 +134,45 @@ async function initDb(pool) {
         redeemed_at TIMESTAMPTZ NULL
       );
   `);
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_room_invites_room
-        ON public.room_invites(room_id);
-    `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_room_invites_room
+      ON public.room_invites(room_id);
+  `);
+
+  // ─── Friends system ───────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.friends (
+      id BIGSERIAL PRIMARY KEY,
+      requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(requester_id, addressee_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_friends_requester ON public.friends(requester_id);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_friends_addressee ON public.friends(addressee_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.room_join_requests (
+      id BIGSERIAL PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(room_id, requester_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_room_join_requests_room ON public.room_join_requests(room_id);
+  `);
 }
 
 module.exports = { createPool, initDb };

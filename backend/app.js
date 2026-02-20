@@ -3,6 +3,7 @@ const cors = require("cors");
 const { corsOptions } = require("./config/cors");
 const createAuthRoutes = require("./routes/auth");
 const createRoomRoutes = require("./routes/rooms");
+const createFriendsRoutes = require("./routes/friends");
 
 function createApp(pool) {
   const app = express();
@@ -14,6 +15,7 @@ function createApp(pool) {
   if (pool) {
     app.use("/api/auth", createAuthRoutes(pool));
     app.use("/api/rooms", createRoomRoutes(pool));
+    app.use("/api/friends", createFriendsRoutes(pool));
   }
 
   return app;

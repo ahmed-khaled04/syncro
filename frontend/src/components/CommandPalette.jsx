@@ -17,43 +17,28 @@ export default function CommandPalette({
 }) {
   const [search, setSearch] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [searchMode, setSearchMode] = useState("quick"); // "quick" or "content"
+  const [searchMode, setSearchMode] = useState("quick");
   const inputRef = useRef(null);
 
-  // Debug: log files when prop changes
-  useEffect(() => {
-    console.log("🎯 CommandPalette: useEffect triggered");
-    console.log("   isOpen =", isOpen);
-    console.log("   files =", files);
-    console.log("   files?.length =", files?.length);
-    
-    if (isOpen) {
-      if (!files || files.length === 0) {
-        console.error("❌ CommandPalette OPENED but files is empty!");
-      } else {
-        console.log("✅ CommandPalette OPENED with files:", files.map(f => f.name).join(", "));
-      }
-    }
-  }, [isOpen, files]);
 
   // Search through file contents
   const searchFileContents = useCallback((query) => {
     if (!ydoc || !query.trim()) return [];
-    
+
     const results = [];
     const filesMap = ydoc.getMap("files");
     const nodesMap = ydoc.getMap("fs:nodes");
-    
+
     if (!filesMap || !nodesMap) return results;
 
     const queryLower = query.toLowerCase();
-    
+
     filesMap.forEach((ytext, fileId) => {
       if (!ytext || typeof ytext.toString !== 'function') return;
-      
+
       const content = ytext.toString();
       const lines = content.split('\n');
-      
+
       // Find matching lines
       const matches = [];
       lines.forEach((line, lineNum) => {
@@ -65,7 +50,7 @@ export default function CommandPalette({
           });
         }
       });
-      
+
       if (matches.length > 0) {
         // Get file name
         let fileName = fileId;
@@ -75,7 +60,7 @@ export default function CommandPalette({
             break;
           }
         }
-        
+
         results.push({
           fileId,
           fileName,
@@ -83,7 +68,7 @@ export default function CommandPalette({
         });
       }
     });
-    
+
     return results;
   }, [ydoc]);
 
@@ -103,7 +88,7 @@ export default function CommandPalette({
           icon: "🔍",
           disabled: true,
         });
-        
+
         contentResults.forEach((result) => {
           result.matches.slice(0, 3).forEach((match) => {
             cmds.push({
@@ -119,7 +104,7 @@ export default function CommandPalette({
               highlight: queryLower,
             });
           });
-          
+
           if (result.matches.length > 3) {
             cmds.push({
               id: `content-more-${result.fileId}`,
@@ -153,15 +138,6 @@ export default function CommandPalette({
           return a.name.length - b.name.length;
         });
 
-      // Debug logging
-      if (queryLower && (!files || files.length === 0)) {
-        console.error("❌ Search query:", queryLower, "but files array is empty or undefined");
-      } else if (queryLower && matchedFiles.length === 0) {
-        console.warn("🔍 Search query:", queryLower, "matched 0 of", files?.length, "files");
-        console.log("📄 Available files:", files?.map(f => f.name));
-      } else if (queryLower && matchedFiles.length > 0) {
-        console.log("✅ Search query:", queryLower, "→ Found", matchedFiles.length, "files:", matchedFiles.map(f => f.name));
-      }
 
       if (matchedFiles.length > 0) {
         cmds.push({
@@ -193,7 +169,7 @@ export default function CommandPalette({
         });
       }
     }
-    
+
     // Quick actions (when in quick mode or no search)
     if (!queryLower || searchMode === "quick") {
       if (!queryLower || "create file".includes(queryLower)) {
@@ -348,11 +324,10 @@ export default function CommandPalette({
               type="button"
               onClick={() => setSearchMode(searchMode === "quick" ? "content" : "quick")}
               title={searchMode === "quick" ? "Search in content (Ctrl+Shift+F)" : "Search in files (Ctrl+Shift+F)"}
-              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                searchMode === "content"
-                  ? "bg-indigo-500/20 text-indigo-100 border border-indigo-500/30"
-                  : "bg-zinc-800/60 text-zinc-400 border border-zinc-700 hover:bg-zinc-700/60"
-              }`}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${searchMode === "content"
+                ? "bg-indigo-500/20 text-indigo-100 border border-indigo-500/30"
+                : "bg-zinc-800/60 text-zinc-400 border border-zinc-700 hover:bg-zinc-700/60"
+                }`}
             >
               {searchMode === "quick" ? "📄 Files" : "🔍 Content"}
             </button>
@@ -422,4 +397,5 @@ export default function CommandPalette({
         </div>
       </div>
     </div>
-  );}
+  );
+}
