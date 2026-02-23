@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { friendsAPI } from "../api/friends";
+import { roomsAPI } from "../api/rooms";
 import { socket } from "../config/socket";
 
 // ─── tiny helpers ────────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ function OnlineDot({ online }) {
 
 // ─── Tab components ───────────────────────────────────────────────────────────
 
-function FriendsTab({ friends, onlineIds, friendsRooms, onUnfriend, onJoin, onRequestJoin }) {
+function FriendsTab({ friends, onlineIds, friendsRooms, joinRequestStatus, onUnfriend, onJoin, onRequestJoin }) {
     if (friends.length === 0) {
         return (
             <div className="flex flex-col items-center py-12 text-zinc-500">
@@ -56,6 +57,7 @@ function FriendsTab({ friends, onlineIds, friendsRooms, onUnfriend, onJoin, onRe
             {friends.map((f) => {
                 const online = onlineIds.includes(f.id);
                 const roomInfo = friendsRooms[f.id];
+                const requestStatus = roomInfo ? joinRequestStatus[roomInfo.roomId] : null;
                 
                 return (
                     <li
@@ -87,6 +89,27 @@ function FriendsTab({ friends, onlineIds, friendsRooms, onUnfriend, onJoin, onRe
                                         className="px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs hover:bg-emerald-500/25 transition-colors whitespace-nowrap"
                                     >
                                         Join Room
+                                    </button>
+                                ) : requestStatus === "accepted" ? (
+                                    <button
+                                        onClick={() => onJoin(roomInfo.roomId)}
+                                        className="px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs hover:bg-emerald-500/25 transition-colors whitespace-nowrap"
+                                    >
+                                        ✅ Join Room
+                                    </button>
+                                ) : requestStatus === "pending" ? (
+                                    <button
+                                        disabled
+                                        className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs opacity-60 cursor-not-allowed whitespace-nowrap"
+                                    >
+                                        ⏳ Pending
+                                    </button>
+                                ) : requestStatus === "declined" ? (
+                                    <button
+                                        disabled
+                                        className="px-2 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs opacity-60 cursor-not-allowed whitespace-nowrap"
+                                    >
+                                        ❌ Declined
                                     </button>
                                 ) : (
                                     <button
@@ -286,6 +309,8 @@ export default function FriendsPanel({ isOpen, onClose, currentUser }) {
     const [onlineIds, setOnlineIds] = useState([]);
     // Map of userId -> { roomId, roomName, isPublic, ownerId }
     const [friendsRooms, setFriendsRooms] = useState({});
+    // Map of roomId -> { status: 'pending' | 'accepted' | 'declined' | null }
+    const [joinRequestStatus, setJoinRequestStatus] = useState({});
     const [toast, setToast] = useState(null);
 
     const showToast = useCallback((msg, type = "info") => {
@@ -359,6 +384,26 @@ const onOnline = ({ userId }) =>
             socket.off("friend:room-update", onRoomUpdate);
         };
     }, []);
+
+    // Check join request status for all friends' rooms
+    useEffect(() => {
+        const checkRequestStatuses = async () => {
+            const statusMap = {};
+            for (const [userId, roomInfo] of Object.entries(friendsRooms)) {
+                try {
+                    const result = await roomsAPI.checkJoinRequestStatus(roomInfo.roomId);
+                    statusMap[roomInfo.roomId] = result.status;
+                } catch (e) {
+                    console.error(`Failed to check join request status for room ${roomInfo.roomId}:`, e);
+                }
+            }
+            setJoinRequestStatus(statusMap);
+        };
+
+        if (Object.keys(friendsRooms).length > 0) {
+            checkRequestStatuses();
+        }
+    }, [friendsRooms]);
 
     const handleAccept = async (req) => {
         try {
@@ -480,6 +525,7 @@ const handleJoin = (roomId) => {
                             friends={friends}
                             onlineIds={onlineIds}
                             friendsRooms={friendsRooms}
+                            joinRequestStatus={joinRequestStatus}
                             onUnfriend={handleUnfriend}
                             onJoin={handleJoin}
                             onRequestJoin={handleRequestJoin}

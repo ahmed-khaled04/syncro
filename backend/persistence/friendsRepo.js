@@ -137,6 +137,71 @@ async function upsertJoinRequest(pool, roomId, requesterId) {
     );
 }
 
+async function listJoinRequests(pool, roomId) {
+  const { rows } = await pool.query(
+    `
+    SELECT
+      r.requester_id AS id,
+      u.name,
+      u.email,
+      r.created_at
+    FROM public.room_join_requests r
+    JOIN public.users u ON u.id = r.requester_id
+    WHERE r.room_id = $1 AND r.status = 'pending'
+    ORDER BY r.created_at DESC
+    `,
+    [roomId]
+  );
+  return rows;
+}
+
+async function setJoinRequestStatus(pool, roomId, requesterId, status) {
+  await pool.query(
+    `
+    UPDATE public.room_join_requests
+    SET status = $3
+    WHERE room_id = $1 AND requester_id = $2
+    `,
+    [roomId, requesterId, status]
+  );
+}
+
+async function addEditorToRoom(pool, roomId, editor) {
+  // Load current editors
+  const { rows } = await pool.query(
+    `SELECT editors FROM public.room_settings WHERE room_id = $1 LIMIT 1`,
+    [roomId]
+  );
+
+  const current = rows[0]?.editors || [];
+  const arr = Array.isArray(current) ? current : [];
+
+  const exists = arr.some((e) => String(e.id) === String(editor.id));
+  if (!exists) arr.push({ id: editor.id, name: editor.name, email: editor.email });
+
+  await pool.query(
+    `UPDATE public.room_settings SET editors = $2::jsonb, updated_at = NOW() WHERE room_id = $1`,
+    [roomId, JSON.stringify(arr)]
+  );
+
+  // Also register them in user_rooms as a participant (if not already)
+  await pool.query(
+    `INSERT INTO user_rooms (user_id, room_id, is_owner, created_at, last_visited_at)
+    VALUES ($1, $2, false, NOW(), NOW())
+    ON CONFLICT (user_id, room_id) DO NOTHING`,
+    [editor.id, roomId]
+  );
+}
+
+async function getRoomOwnerId(pool, roomId) {
+  const { rows } = await pool.query(
+    `SELECT owner_id FROM public.room_settings WHERE room_id = $1 LIMIT 1`,
+    [roomId]
+  );
+  return rows[0]?.owner_id ?? null; // TEXT
+}
+
+
 module.exports = {
     findUserByEmail,
     sendRequest,
@@ -147,4 +212,8 @@ module.exports = {
     areFriends,
     removeFriend,
     upsertJoinRequest,
+    listJoinRequests,
+    setJoinRequestStatus,
+    addEditorToRoom,
+    getRoomOwnerId,
 };

@@ -1,11 +1,19 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const {authMiddleware} = require("../middleware/auth.js");
 
 const {
   isUserConnectedToRoom,
   getConnectedUsers,
   debugDump,
 } = require("../rooms/roomConnections");
+
+const {
+  listJoinRequests,
+  setJoinRequestStatus,
+  addEditorToRoom,
+  getRoomOwnerId,
+} = require("../persistence/friendsRepo");
 
 const crypto = require("crypto");
 
@@ -77,6 +85,7 @@ async function validateInvite(pool, roomId, token) {
 
 //Endpoints
 function createRoomRoutes(pool) {
+
   // Get user's rooms (owned and visited)
   router.get("/my-rooms", verifyToken, async (req, res) => {
     try {
@@ -177,7 +186,7 @@ function createRoomRoutes(pool) {
 
       // 1) room exists?
       const roomCheck = await client.query(
-        "SELECT lang, owner_id, is_public FROM room_settings WHERE room_id = $1",
+        "SELECT lang, owner_id, is_public, editors FROM room_settings WHERE room_id = $1",
         [roomId]
       );
       if (roomCheck.rows.length === 0) {
@@ -187,7 +196,12 @@ function createRoomRoutes(pool) {
       const roomLang = roomCheck.rows[0].lang;
       const ownerId = roomCheck.rows[0].owner_id;
       const isPublic = roomCheck.rows[0].is_public;
+      const editors = roomCheck.rows[0].editors || [];
       const isOwner = String(ownerId) === String(req.user.id);
+      
+      // Check if user is in the editors whitelist (accepted users)
+      const isEditorAllowed = Array.isArray(editors) && 
+        editors.some((e) => String(e.id) === String(req.user.id));
 
       // 2) membership check
       const existingEntry = await client.query(
@@ -210,6 +224,7 @@ function createRoomRoutes(pool) {
           ownerId: norm(ownerId),
           ownerOnline,
           isPublic,
+          isEditorAllowed,
           inviteProvided: !!inviteToken,
           connectedUsers: getConnectedUsers(norm(roomId)),
         });
@@ -221,44 +236,50 @@ function createRoomRoutes(pool) {
           });
         }
 
-        // 5) If room is PRIVATE: require invite (always)
+        // 5) If room is PRIVATE: require invite OR be in editors whitelist
         // If room is PUBLIC: invite is optional (already online check passed)
-        if (!alreadyMember && (inviteToken || !isPublic)) {
-          // invite is provided OR room is private (need to validate/redeem)
-          if (!inviteToken) {
-            return res
-              .status(401)
-              .json({ error: "Invite token is required to join this private room." });
+        if (!alreadyMember && !isEditorAllowed) {
+          // User is not a member and not in editors - need an invite
+          if (!isPublic || !inviteToken) {
+            // If private, ALWAYS require token. If public, token is optional.
+            if (!isPublic && !inviteToken) {
+              return res
+                .status(401)
+                .json({ error: "Invite token is required to join this private room." });
+            }
           }
 
-          await client.query("BEGIN");
+          // If we have an invite token, validate and redeem it
+          if (inviteToken) {
+            await client.query("BEGIN");
 
-          // Redeem invite atomically: also enforces expiry, revoked, and single-use
-          const redeem = await client.query(
-            `
-            UPDATE room_invites
-            SET redeemed_by = $1,
-                redeemed_at = NOW()
-            WHERE room_id = $2
-              AND token = $3
-              AND revoked = FALSE
-              AND redeemed_at IS NULL
-              AND (expires_at IS NULL OR expires_at > NOW())
-            RETURNING token
-            `,
-            [String(req.user.id), roomId, inviteToken]
-          );
+            // Redeem invite atomically: also enforces expiry, revoked, and single-use
+            const redeem = await client.query(
+              `
+              UPDATE room_invites
+              SET redeemed_by = $1,
+                  redeemed_at = NOW()
+              WHERE room_id = $2
+                AND token = $3
+                AND revoked = FALSE
+                AND redeemed_at IS NULL
+                AND (expires_at IS NULL OR expires_at > NOW())
+              RETURNING token
+              `,
+              [String(req.user.id), roomId, inviteToken]
+            );
 
-          if (redeem.rowCount === 0) {
-            await client.query("ROLLBACK");
-            return res.status(410).json({
-              error: "Invite expired / invalid / already used or revoked",
-            });
+            if (redeem.rowCount === 0) {
+              await client.query("ROLLBACK");
+              return res.status(410).json({
+                error: "Invite expired / invalid / already used or revoked",
+              });
+            }
+
+            await client.query("COMMIT");
           }
-
-          await client.query("COMMIT");
         }
-        // 6) If alreadyMember: no invite needed (but owner online is still required, already enforced)
+        // 6) If alreadyMember or isEditorAllowed: can join without invite
       }
 
       // 7) Upsert membership / last_visited
@@ -547,6 +568,160 @@ function createRoomRoutes(pool) {
     } catch (error) {
       console.error("Error validating invite:", error);
       res.status(500).json({ valid: false, error: "Failed to validate invite" });
+    }
+  });
+
+  // Check join request status for current user
+  router.get("/:roomId/join-request-status", verifyToken, async (req, res) => {
+    const { roomId } = req.params;
+
+    try {
+      // Check if user is in editors (accepted)
+      const roomCheck = await pool.query(
+        "SELECT editors FROM room_settings WHERE room_id = $1",
+        [roomId]
+      );
+
+      if (roomCheck.rows.length === 0) {
+        return res.status(404).json({ error: "Room not found" });
+      }
+
+      const editors = roomCheck.rows[0].editors || [];
+      const isEditorAllowed = Array.isArray(editors) && 
+        editors.some((e) => String(e.id) === String(req.user.id));
+
+      if (isEditorAllowed) {
+        return res.json({ status: "accepted" });
+      }
+
+      // Check if there's a pending/declined request
+      const requestCheck = await pool.query(
+        `SELECT status FROM public.room_join_requests 
+        WHERE room_id = $1 AND requester_id = $2
+        LIMIT 1`,
+        [roomId, req.user.id]
+      );
+
+      if (requestCheck.rows.length > 0) {
+        const status = requestCheck.rows[0].status;
+        return res.json({ status });
+      }
+
+      // No request or editor access
+      res.json({ status: null });
+    } catch (e) {
+      console.error("check join-request-status error:", e);
+      res.status(500).json({ error: "Failed to check join request status" });
+    }
+  });
+
+  // Owner-only: list pending join requests
+  router.get("/:roomId/join-requests", verifyToken, async (req, res) => {
+    const { roomId } = req.params;
+
+    try {
+      const ownerId = await getRoomOwnerId(pool, roomId);
+      if (!ownerId || String(ownerId) !== String(req.user.id)) {
+        return res.status(403).json({ error: "Only the owner can view join requests" });
+      }
+
+      const requests = await listJoinRequests(pool, roomId);
+      res.json({ requests });
+    } catch (e) {
+      console.error("list join-requests error:", e);
+      res.status(500).json({ error: "Failed to load join requests" });
+    }
+  });
+
+  // Owner-only: accept request => mark accepted + add to editors allowlist
+  router.post("/:roomId/join-requests/:requesterId/accept", verifyToken, async (req, res) => {
+    const { roomId, requesterId } = req.params;
+    const rid = parseInt(requesterId, 10);
+    if (Number.isNaN(rid)) return res.status(400).json({ error: "Invalid requesterId" });
+
+    try {
+      const ownerId = await getRoomOwnerId(pool, roomId);
+      if (!ownerId || String(ownerId) !== String(req.user.id)) {
+        return res.status(403).json({ error: "Only the owner can accept" });
+      }
+
+      // get requester details
+      const { rows } = await pool.query(
+        `SELECT id, name, email FROM public.users WHERE id = $1 LIMIT 1`,
+        [rid]
+      );
+      const u = rows[0];
+      if (!u) return res.status(404).json({ error: "Requester not found" });
+
+      // Get room name for notification
+      const roomRes = await pool.query(
+        `SELECT name FROM room_settings WHERE room_id = $1 LIMIT 1`,
+        [roomId]
+      );
+      const roomName = roomRes.rows[0]?.name || roomId;
+
+      console.log(`✅ Accepting join request: user ${u.id} (${u.name}) → room ${roomId}`);
+
+      await setJoinRequestStatus(pool, roomId, rid, "accepted");
+      await addEditorToRoom(pool, roomId, u);
+
+      console.log(`✅ User ${u.id} is now added to editors and user_rooms for room ${roomId}`);
+
+      // Emit socket event to notify the requester
+      const io = req.app.get("io");
+      if (io) {
+        io.to(`user:${rid}`).emit("join-request:accepted", {
+          roomId,
+          roomName,
+          userId: rid,
+        });
+      }
+
+      res.json({ ok: true, user: u });
+    } catch (e) {
+      console.error("accept join-request error:", e);
+      res.status(500).json({ error: "Failed to accept request" });
+    }
+  });
+
+
+  // Owner-only: decline request
+  router.post("/:roomId/join-requests/:requesterId/decline", verifyToken, async (req, res) => {
+    const { roomId, requesterId } = req.params;
+    const rid = parseInt(requesterId, 10);
+    if (Number.isNaN(rid)) return res.status(400).json({ error: "Invalid requesterId" });
+
+    try {
+      const ownerId = await getRoomOwnerId(pool, roomId);
+      if (!ownerId || String(ownerId) !== String(req.user.id)) {
+        return res.status(403).json({ error: "Only the owner can decline" });
+      }
+
+      // Get room name for notification
+      const roomRes = await pool.query(
+        `SELECT name FROM room_settings WHERE room_id = $1 LIMIT 1`,
+        [roomId]
+      );
+      const roomName = roomRes.rows[0]?.name || roomId;
+
+      console.log(`❌ Declining join request: user ${rid} → room ${roomId}`);
+      await setJoinRequestStatus(pool, roomId, rid, "declined");
+      console.log(`❌ Join request declined for user ${rid} in room ${roomId}`);
+
+      // Emit socket event to notify the requester
+      const io = req.app.get("io");
+      if (io) {
+        io.to(`user:${rid}`).emit("join-request:declined", {
+          roomId,
+          roomName,
+          userId: rid,
+        });
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("decline join-request error:", e);
+      res.status(500).json({ error: "Failed to decline request" });
     }
   });
 

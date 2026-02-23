@@ -212,6 +212,7 @@ export default function EditorHeader({
   onClearRequest,
   onClearAllRequests,
   onExport,
+  onOpenJoinRequests,
 }) {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
@@ -339,6 +340,12 @@ export default function EditorHeader({
                 <PillButton onClick={onExport} title="Export project as ZIP">
                   📦 Export
                 </PillButton>
+
+                {youAreOwner && (
+                  <PillButton onClick={onOpenJoinRequests} title="View join requests">
+                    🔔 Join Requests
+                  </PillButton>
+                )}
 
                 <PillButton
                   disabled={!youAreOwner}

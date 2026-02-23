@@ -41,6 +41,9 @@ async function main() {
 
   const io = new Server(server, { cors: corsOptions() });
 
+  // Set io on the app for later use in routes
+  app.set("io", io);
+
   io.use((socket, next) => {
     try {
       const token = extractTokenFromSocket(socket);

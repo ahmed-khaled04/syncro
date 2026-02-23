@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { roomsAPI } from "../api/rooms";
 import { friendsAPI } from "../api/friends";
+import { socket } from "../config/socket";
 import FriendsPanel from "../components/FriendsPanel";
 
 export default function Dashboard() {
@@ -12,6 +13,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [notifications, setNotifications] = useState([]);
 
   // Modals
   const [createRoomModalOpen, setCreateRoomModalOpen] = useState(false);
@@ -46,6 +48,49 @@ export default function Dashboard() {
     if (!user) return;
     friendsAPI.getIncoming().then((d) => setPendingFriendCount(d.requests.length)).catch(() => { });
   }, [user]);
+
+  // Socket listeners for join request notifications
+  useEffect(() => {
+    const handleJoinRequestAccepted = ({ roomId, roomName, userId }) => {
+      if (String(userId) === String(user?.id)) {
+        const notificationId = Math.random().toString(36).substr(2, 9);
+        const notification = {
+          id: notificationId,
+          type: "success",
+          message: `✅ Your join request for "${roomName}" was accepted! You can now join the room.`,
+          roomId,
+        };
+        setNotifications((prev) => [notification, ...prev]);
+        setTimeout(() => {
+          setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+        }, 5000);
+      }
+    };
+
+    const handleJoinRequestDeclined = ({ roomId, roomName, userId }) => {
+      if (String(userId) === String(user?.id)) {
+        const notificationId = Math.random().toString(36).substr(2, 9);
+        const notification = {
+          id: notificationId,
+          type: "error",
+          message: `❌ Your join request for "${roomName}" was declined.`,
+          roomId,
+        };
+        setNotifications((prev) => [notification, ...prev]);
+        setTimeout(() => {
+          setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+        }, 5000);
+      }
+    };
+
+    socket.on("join-request:accepted", handleJoinRequestAccepted);
+    socket.on("join-request:declined", handleJoinRequestDeclined);
+
+    return () => {
+      socket.off("join-request:accepted", handleJoinRequestAccepted);
+      socket.off("join-request:declined", handleJoinRequestDeclined);
+    };
+  }, [user?.id]);
 
   // Load rooms
   useEffect(() => {
@@ -318,6 +363,28 @@ export default function Dashboard() {
               {successMessage}
             </div>
           )}
+
+          {/* Join Request Notifications */}
+          {notifications.map((notification) => (
+            <div
+              key={notification.id}
+              className={`mb-3 p-4 rounded-lg border backdrop-blur-sm animate-slide-in shadow-xl pointer-events-auto flex items-center justify-between gap-3 ${
+                notification.type === "success"
+                  ? "bg-green-500/30 border-green-500/50 text-green-300"
+                  : "bg-red-500/30 border-red-500/50 text-red-300"
+              }`}
+            >
+              <span>{notification.message}</span>
+              {notification.type === "success" && notification.roomId && (
+                <button
+                  onClick={() => navigate(`/room/${notification.roomId}`)}
+                  className="px-3 py-1 rounded bg-green-600/50 hover:bg-green-600 text-white text-sm font-medium whitespace-nowrap transition-colors"
+                >
+                  Join Now
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       </div>
       {/* Main Content */}

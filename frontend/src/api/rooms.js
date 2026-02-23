@@ -194,7 +194,69 @@ export const roomsAPI = {
     return await response.json(); // { valid, invite? }
   },
 
+  async listJoinRequests(roomId) {
+    const token = this.getToken();
 
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join-requests`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to fetch join requests");
+    }
 
+    const data = await response.json();
+    return data.requests || data;
+  },
+
+  async acceptJoinRequest(roomId, requesterId) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join-requests/${requesterId}/accept`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to accept join request");
+    }
+
+    const data = await response.json();
+    return data;
+  },
+
+  async declineJoinRequest(roomId, requesterId) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join-requests/${requesterId}/decline`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to decline join request");
+    }
+
+    const data = await response.json();
+    return data;
+  },
+
+  async checkJoinRequestStatus(roomId) {
+    const token = this.getToken();
+
+    const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join-request-status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to check join request status");
+    }
+
+    const data = await response.json();
+    return data; // { status: 'pending' | 'accepted' | 'declined' | null }
+  },
 };

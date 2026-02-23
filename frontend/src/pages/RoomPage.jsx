@@ -14,6 +14,7 @@ import FileExplorer from "../components/FileExplorer";
 import SnapshotPanel from "../components/SnapshotPanel";
 import TabsBar from "../components/TabsBar";
 import CommandPalette from "../components/CommandPalette";
+import JoinRequestsPanel from "../components/JoinRequestsPanel";
 
 export default function RoomPage() {
   const { roomId } = useParams();
@@ -79,6 +80,9 @@ export default function RoomPage() {
 
   //  snapshot panel modal
   const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
+
+  //  join requests panel modal
+  const [joinRequestsPanelOpen, setJoinRequestsPanelOpen] = useState(false);
 
   //  sidebar collapse state
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -885,6 +889,7 @@ if (roomId) doJoin();
             onClearRequest={(id) => setEditRequests((prev) => prev.filter((r) => r.id !== id))}
             onClearAllRequests={() => setEditRequests([])}
             onExport={handleExportProject}
+            onOpenJoinRequests={() => setJoinRequestsPanelOpen(true)}
           />
         </div>
       </div>
@@ -1355,6 +1360,13 @@ if (roomId) doJoin();
           </>,
           document.body
         )}
+
+        {/* Join Requests Panel */}
+        <JoinRequestsPanel
+          roomId={roomId}
+          isOpen={joinRequestsPanelOpen}
+          onClose={() => setJoinRequestsPanelOpen(false)}
+        />
     </div>
   );
 }
