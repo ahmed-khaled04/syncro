@@ -3,6 +3,7 @@
  */
 
 import { apiClient } from "../client.js";
+import { updateSocketAuth, disconnectSocket } from "../../config/socket.js";
 
 export const authService = {
   /**
@@ -18,6 +19,8 @@ export const authService = {
     // Store token if provided
     if (data.token) {
       apiClient.setToken(data.token);
+      // 🔑 CRITICAL: Update socket auth after successful registration
+      updateSocketAuth(data.token);
     }
     
     return data.user;
@@ -35,6 +38,9 @@ export const authService = {
     // Store token if provided
     if (data.token) {
       apiClient.setToken(data.token);
+      // 🔑 CRITICAL: Update socket auth after successful login
+      // This triggers socket reconnection with the new token
+      updateSocketAuth(data.token);
     }
 
     return data.user;
@@ -50,11 +56,12 @@ export const authService = {
     }
 
     try {
-      const data = await apiClient.post("/auth/verify", {});
+      const data = await apiClient.get("/auth/me");
       return data.user;
     } catch (error) {
-      // Token invalid, clear it
+      // Token invalid, clear it and disconnect socket
       apiClient.clearAuth();
+      disconnectSocket();
       throw error;
     }
   },
@@ -64,6 +71,8 @@ export const authService = {
    */
   logout() {
     apiClient.clearAuth();
+    // 🔑 CRITICAL: Disconnect socket on logout
+    disconnectSocket();
   },
 
   /**
@@ -71,6 +80,10 @@ export const authService = {
    */
   setToken(token) {
     apiClient.setToken(token);
+    // Update socket auth if token is provided
+    if (token) {
+      updateSocketAuth(token);
+    }
   },
 
   /**

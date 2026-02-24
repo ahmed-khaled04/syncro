@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { AuthContext } from "./auth";
 import { authAPI } from "../api/auth";
+import { updateSocketAuth, disconnectSocket } from "../config/socket.js";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -13,9 +14,17 @@ export function AuthProvider({ children }) {
       try {
         const currentUser = await authAPI.getCurrentUser();
         setUser(currentUser);
+        
+        // 🔑 CRITICAL: Initialize socket auth if user is authenticated
+        const token = authAPI.getToken();
+        if (token) {
+          updateSocketAuth(token);
+        }
       } catch (err) {
         console.error("Failed to load user:", err);
         setUser(null);
+        // Clear socket if auth fails
+        disconnectSocket();
       } finally {
         setLoading(false);
       }
@@ -70,6 +79,7 @@ export function AuthProvider({ children }) {
     authAPI.logout();
     setUser(null);
     setError(null);
+    // Socket already disconnected in authAPI.logout()
   };
 
   const updateProfile = (updates) => {

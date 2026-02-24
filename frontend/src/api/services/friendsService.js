@@ -16,9 +16,9 @@ export const friendsService = {
   /**
    * Send a friend request
    */
-  async sendRequest(recipientEmail) {
+  async sendRequest(addresseeEmail) {
     const data = await apiClient.post("/friends/requests", {
-      recipientEmail,
+      addresseeEmail,
     });
     return data;
   },

@@ -136,11 +136,4 @@ export const roomService = {
     return data; // { status: 'pending' | 'accepted' | 'declined' | null }
   },
 
-  /**
-   * Request to join a private room
-   */
-  async requestJoinRoom(roomId) {
-    const data = await apiClient.post(`/rooms/${roomId}/join-request`, {});
-    return data;
-  },
 };
