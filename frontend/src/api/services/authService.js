@@ -9,7 +9,7 @@ export const authService = {
    * Register a new user
    */
   async register(email, password, name) {
-    const data = await apiClient.post("/auth/register", {
+    const data = await apiClient.post("/auth/signup", {
       email,
       password,
       name,
