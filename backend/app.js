@@ -16,6 +16,7 @@ function createApp(pool) {
     app.use("/api/auth", createAuthRoutes(pool));
     app.use("/api/rooms", createRoomRoutes(pool));
     app.use("/api/friends", createFriendsRoutes(pool));
+    app.get("/health", (req, res) => res.json({ ok: true }));
   }
 
   return app;
