@@ -472,7 +472,7 @@ function createRoomRoutes(pool) {
       );
 
       // You can build a full URL on frontend; here we return the path.
-      const inviteUrl = `/room/${roomId}?invite=${token}`;
+      const inviteUrl = `/invite/${roomId}/${token}`;
 
       res.status(201).json({
         invite: {
@@ -556,6 +556,13 @@ function createRoomRoutes(pool) {
       const invite = await validateInvite(pool, String(roomId), String(token));
       if (!invite) return res.json({ valid: false });
 
+      // Also fetch room details for the invite preview
+      const roomResult = await pool.query(
+        "SELECT name, description, lang FROM room_settings WHERE room_id = $1",
+        [roomId]
+      );
+      const roomSettings = roomResult.rows[0] || {};
+
       res.json({
         valid: true,
         invite: {
@@ -563,6 +570,9 @@ function createRoomRoutes(pool) {
           expiresAt: invite.expires_at,
           revoked: invite.revoked,
           redeemedAt: invite.redeemed_at,
+          roomName: roomSettings.name,
+          description: roomSettings.description,
+          lang: roomSettings.lang,
         },
       });
     } catch (error) {

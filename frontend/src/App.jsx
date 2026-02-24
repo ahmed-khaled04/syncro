@@ -1,9 +1,11 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import { useAuth } from "./hooks/useAuth";
+import LandingPage from "./pages/LandingPage";
 import AuthPage from "./pages/AuthPage";
 import Dashboard from "./pages/Dashboard";
 import RoomPage from "./pages/RoomPage";
+import InvitePage from "./pages/InvitePage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -28,10 +30,23 @@ function ProtectedRoute({ children }) {
 
 function AppRoutes() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const returnTo = searchParams.get("returnTo");
+  const mode = searchParams.get("mode");
+
+  // If there's a returnTo and user is logged in, navigate to it
+  if (returnTo && user) {
+    return <Navigate to={returnTo} replace />;
+  }
 
   return (
     <Routes>
-      <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <AuthPage />} />
+      <Route 
+        path="/" 
+        element={
+          mode || returnTo ? <AuthPage /> : (user ? <Navigate to="/dashboard" replace /> : <LandingPage />)
+        } 
+      />
       <Route
         path="/dashboard"
         element={
@@ -48,6 +63,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route path="/invite/:roomId/:token" element={<InvitePage />} />
     </Routes>
   );
 }

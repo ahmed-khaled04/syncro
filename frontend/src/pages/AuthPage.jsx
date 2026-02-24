@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
 function generateRoomId() {
@@ -8,9 +8,12 @@ function generateRoomId() {
 
 export default function AuthPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { signup, login } = useAuth();
+  const returnTo = searchParams.get("returnTo") || "/dashboard";
+  const initialMode = searchParams.get("mode") === "signup" ? "signup" : "login";
 
-  const [mode, setMode] = useState("login"); // "login" or "signup"
+  const [mode, setMode] = useState(initialMode); // "login" or "signup"
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -63,7 +66,8 @@ export default function AuthPage() {
 
     try {
       await login(loginForm.email, loginForm.password);
-      setMode("join");
+      // Navigate to the return URL (invite page or dashboard)
+      navigate(returnTo);
       setLoginForm({ email: "", password: "" });
     } catch (err) {
       setError(err.message);

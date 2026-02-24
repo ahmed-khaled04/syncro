@@ -342,6 +342,17 @@ export default function FriendsPanel({ isOpen, onClose, currentUser }) {
         loadAll();
     }, [isOpen, loadAll]);
 
+    // Auto-refresh friends list every 30 seconds when open
+    useEffect(() => {
+        if (!isOpen) return;
+        
+        const interval = setInterval(() => {
+            loadAll();
+        }, 30000); // 30 seconds
+        
+        return () => clearInterval(interval);
+    }, [isOpen, loadAll]);
+
     // Socket listeners
     useEffect(() => {
 const onOnline = ({ userId }) =>

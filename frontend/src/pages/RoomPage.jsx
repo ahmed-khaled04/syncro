@@ -134,7 +134,7 @@ export default function RoomPage() {
   }, [selectedFileName]);
 
   const buildFullInviteLink = (inviteUrl) => {
-    // inviteUrl from backend looks like /room/:roomId?invite=...
+    // inviteUrl from backend looks like /invite/:roomId/:token
     return `${window.location.origin}${inviteUrl}`;
   };
 
@@ -1195,7 +1195,7 @@ if (roomId) doJoin();
                     ) : (
                       <div className="divide-y divide-zinc-800">
                         {invites.map((inv) => {
-                          const link = buildFullInviteLink(`/room/${roomId}?invite=${inv.token}`);
+                          const link = buildFullInviteLink(`/invite/${roomId}/${inv.token}`);
                           const used = !!inv.redeemed_at;
                           const revoked = !!inv.revoked;
 

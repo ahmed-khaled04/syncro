@@ -173,11 +173,12 @@ export default function Dashboard() {
       setCreateRoomName("");
       setCreateRoomDescription("");
       setCreateRoomModalOpen(false);
-      setSuccessMessage(`Room "${createRoomName}" created! Redirecting...`);
+      setSuccessMessage(`Room "${createRoomName}" created! 🎉`);
 
+      // Auto-clear success message after 3 seconds
       setTimeout(() => {
-        navigate(`/room/${newRoom.room_id}`);
-      }, 1500);
+        setSuccessMessage("");
+      }, 3000);
     } catch (err) {
       setError(err.message);
     } finally {
