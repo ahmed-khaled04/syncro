@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
+import AppIcon from "../components/AppIcon";
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -16,8 +17,11 @@ export default function LandingPage() {
       {/* Navigation */}
       <nav className="fixed top-0 w-full z-50 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
-            Syncro
+          <div className="flex items-center gap-3">
+            <AppIcon className="w-8 h-8" />
+            <div className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+              Syncro
+            </div>
           </div>
           <button
             onClick={() => navigate("/?mode=login")}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import AppIcon from "../components/AppIcon";
 
 function generateRoomId() {
   return Math.random().toString(36).slice(2, 8);
@@ -104,7 +105,8 @@ export default function AuthPage() {
       {/* Content */}
       <div className="relative w-full max-w-sm px-4">
         {/* Logo/Header */}
-        <div className="mb-8 text-center">
+        <div className="mb-8 text-center flex flex-col items-center">
+          <AppIcon className="w-12 h-12 mb-4" />
           <h1 className="mb-2 text-4xl font-bold tracking-tight">Syncro</h1>
           <p className="text-sm text-zinc-400">Real-time Collaborative Editor</p>
         </div>

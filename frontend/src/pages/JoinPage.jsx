@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import AppIcon from "../components/AppIcon";
 
 function generateRoomId() {
   return Math.random().toString(36).slice(2, 8);
@@ -25,8 +26,13 @@ export default function JoinPage() {
         onSubmit={handleJoin}
         className="w-full max-w-sm space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 shadow-xl backdrop-blur"
       >
-        <h1 className="text-2xl font-semibold tracking-tight">Join Syncro</h1>
-        <p className="text-sm text-zinc-400">
+        <div className="flex items-center justify-center gap-3 mb-4">
+          <AppIcon className="w-8 h-8" />
+          <div className="text-center">
+            <h1 className="text-2xl font-semibold tracking-tight">Join Syncro</h1>
+          </div>
+        </div>
+        <p className="text-sm text-zinc-400 text-center">
           Real-time collaborative editor
         </p>
 

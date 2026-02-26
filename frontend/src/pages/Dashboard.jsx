@@ -5,6 +5,7 @@ import { roomsAPI } from "../api/rooms";
 import { friendsAPI } from "../api/friends";
 import { socket } from "../config/socket";
 import FriendsPanel from "../components/FriendsPanel";
+import AppIcon from "../components/AppIcon";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -314,11 +315,14 @@ export default function Dashboard() {
       {/* Header */}
       <header className="relative border-b border-zinc-800/50 bg-zinc-950/50 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-6 py-5 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-400 via-cyan-300 to-violet-400 bg-clip-text text-transparent">
-              Syncro
-            </h1>
-            <p className="text-sm text-zinc-400 mt-1">Collaborative Editor</p>
+          <div className="flex items-center gap-3">
+            <AppIcon className="w-8 h-8" />
+            <div>
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-400 via-cyan-300 to-violet-400 bg-clip-text text-transparent">
+                Syncro
+              </h1>
+              <p className="text-sm text-zinc-400 mt-1">Collaborative Editor</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-4">

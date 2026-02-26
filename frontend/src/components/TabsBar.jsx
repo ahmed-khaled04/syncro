@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useAllFileActivity } from "../hooks/useFileActivity";
+import AppIcon from "./AppIcon";
 
 export default function TabsBar({
   openFiles,
@@ -41,6 +42,7 @@ export default function TabsBar({
               className="inline-flex items-center gap-2 focus:outline-none"
               title={file.name}
             >
+              <AppIcon className="w-4 h-4 flex-shrink-0" />
               <span className="truncate">{file.name}</span>
               {isDirty && <span className="text-amber-400 text-xs">●</span>}
               

@@ -15,6 +15,7 @@ import SnapshotPanel from "../components/SnapshotPanel";
 import TabsBar from "../components/TabsBar";
 import CommandPalette from "../components/CommandPalette";
 import JoinRequestsPanel from "../components/JoinRequestsPanel";
+import AppIcon from "../components/AppIcon";
 
 export default function RoomPage() {
   const { roomId } = useParams();
@@ -787,10 +788,13 @@ if (roomId) doJoin();
               </svg>
             </button>
 
-            <div className="min-w-0">
-              <div className="text-xs text-zinc-500 tracking-wide">SYNCRO</div>
-              <div className="text-sm font-semibold truncate">
-                Room <span className="font-mono text-indigo-400">#{roomId}</span>
+            <div className="min-w-0 flex items-center gap-2">
+              <AppIcon className="w-6 h-6 flex-shrink-0" />
+              <div>
+                <div className="text-xs text-zinc-500 tracking-wide">SYNCRO</div>
+                <div className="text-sm font-semibold truncate">
+                  Room <span className="font-mono text-indigo-400">#{roomId}</span>
+                </div>
               </div>
             </div>
 

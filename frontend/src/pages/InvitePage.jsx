@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { roomsAPI } from "../api/rooms";
+import AppIcon from "../components/AppIcon";
 
 export default function InvitePage() {
   const { roomId, token } = useParams();
@@ -106,7 +107,7 @@ export default function InvitePage() {
         ) : roomInfo ? (
           <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 backdrop-blur p-8 shadow-2xl">
             <div className="flex items-center gap-3 mb-6">
-              <span className="text-4xl">📨</span>
+              <AppIcon className="w-12 h-12 flex-shrink-0" />
               <div>
                 <h1 className="text-3xl font-bold">You're Invited!</h1>
                 <p className="text-sm text-zinc-400">to join a collaborative room</p>
